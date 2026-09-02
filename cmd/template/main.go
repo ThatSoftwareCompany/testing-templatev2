@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"os"
 
-	platformtemplate "github.com/ThatSoftwareCompany/template-go-api/internal/platform/template"
+	platformtemplate "github.com/ThatSoftwareCompany/testing-templatev2/internal/platform/template"
 )
 
 func main() {

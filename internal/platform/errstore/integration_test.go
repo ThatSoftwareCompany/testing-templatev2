@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	platformmigrate "github.com/ThatSoftwareCompany/template-go-api/internal/platform/migrate"
+	platformmigrate "github.com/ThatSoftwareCompany/testing-templatev2/internal/platform/migrate"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 

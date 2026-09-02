@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/ThatSoftwareCompany/template-go-api/internal/platform/config"
+	"github.com/ThatSoftwareCompany/testing-templatev2/internal/platform/config"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 

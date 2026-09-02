@@ -1,4 +1,4 @@
-module github.com/ThatSoftwareCompany/template-go-api
+module github.com/ThatSoftwareCompany/testing-templatev2
 
 go 1.26.0
 

@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ThatSoftwareCompany/template-go-api/internal/platform/config"
+	"github.com/ThatSoftwareCompany/testing-templatev2/internal/platform/config"
 )
 
 func TestOpenRejectsInvalidDatabaseURL(t *testing.T) {

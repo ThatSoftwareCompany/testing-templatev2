@@ -3,7 +3,7 @@ package health
 import (
 	"net/http"
 
-	"github.com/ThatSoftwareCompany/template-go-api/internal/platform/httpserver"
+	"github.com/ThatSoftwareCompany/testing-templatev2/internal/platform/httpserver"
 )
 
 type Controller struct {

@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/ThatSoftwareCompany/template-go-api/internal/platform/config"
-	platformmigrate "github.com/ThatSoftwareCompany/template-go-api/internal/platform/migrate"
+	"github.com/ThatSoftwareCompany/testing-templatev2/internal/platform/config"
+	platformmigrate "github.com/ThatSoftwareCompany/testing-templatev2/internal/platform/migrate"
 )
 
 func main() {

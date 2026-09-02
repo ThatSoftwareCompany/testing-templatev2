@@ -1,6 +1,6 @@
-# {{PROJECT_NAME}}
+# testing-templatev2
 
-Reusable Go API foundation for That Software Company. The generated application name is `{{APP_NAME}}`.
+Reusable Go API foundation for That Software Company. The generated application name is `testing-templatev2`.
 
 ## Requirements
 

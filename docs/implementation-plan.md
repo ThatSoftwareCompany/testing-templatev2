@@ -17,10 +17,11 @@ Every release must have a version tag, a release note under `docs/releases/`, an
 - `0.2.7`: lifecycle fix commit published before the release metadata preparation was completed; retained as an immutable historical tag.
 - `0.2.8`: corrected publication of the lifecycle hotfix with consistent version metadata.
 - `0.2.9`: provenance detection hotfix for derived repositories whose recorded source commit differs from an immutable historical tag.
+- `0.2.10`: updater hardening for pre-applied files, custom module paths, base blobs, and explicit conflict reporting.
 
 ## `0.2.5` — foundation hardening
 
-This is the current implementation scope. It closes the foundation quality gap without introducing authentication or other feature-level breaking changes.
+This is the foundation hardening baseline. It closes the initial quality gap without introducing authentication or other feature-level breaking changes.
 
 - Expand unit and HTTP coverage for configuration, middleware, error responses, CORS, security headers, logging behavior, and panic recovery.
 - Run PostgreSQL integration tests for pool initialization, migrations, safe error persistence, filters, limits, idempotency, and unavailable-database failures.
@@ -50,7 +51,21 @@ The lifecycle workflow now prefers a valid `template_commit` that can be resolve
 - Document the one-time workflow bootstrap required by repositories that already applied the lifecycle fix with the older detector.
 - Keep the update path reviewed, explicit, and free of force-pushed tags.
 
-Acceptance criteria: `v0.2.9` includes the corrected workflow, the source CI passes, and `testing-template` can update from its recorded `55e61fb` source commit without replaying the old `v0.2.6` tag diff.
+Acceptance criteria: `v0.2.9` includes the corrected workflow and source CI passes. Repositories with partially applied historical changes are migrated through the `v0.2.10` updater hardening path.
+
+## `0.2.10` — updater conflict hardening
+
+The updater must distinguish clean generated repositories, repositories with harmless pre-applied template files, and repositories with semantic application changes.
+
+- Import source base blobs before attempting a three-way merge.
+- Normalize generated Go module paths without corrupting patch context.
+- Skip already-applied files when comparison is safe, including harmless YAML formatting differences.
+- Detect failed hunks even when Git returns a successful process status after partial application.
+- Report unresolved or unapplied paths and leave provenance unchanged until the update completes successfully.
+- Preserve application-owned `internal/app/routes.go` and never resolve semantic conflicts automatically.
+- Exercise clean-room, legacy, pre-applied, custom-module, route-preservation, incompatible, deletion, and explicit-conflict scenarios.
+
+Acceptance criteria: the lifecycle suite passes, the actual `testing-template` history can be repaired with a reviewed migration, and a clean `testing-templatev2` repository can consume the release without historical conflicts.
 
 ## `0.3.0` — authentication and authorization
 
@@ -96,14 +111,14 @@ Document and validate the deployment contract without changing the frontend temp
 
 ## `1.0.0` — final validation
 
-Create `testing-templatev2` from the GitHub Template Repository and run the full matrix: new setup, PostgreSQL mode, no-database mode, a business route registered only through `internal/app/routes.go`, tests, Docker, migrations, CI, automatic updates, route preservation, authentication, authorized internal errors, and secret/file absence checks. Publish `1.0.0` only after that repository passes from a clean start.
+Use the private `testing-templatev2` clean-room repository created from the GitHub Template Repository and run the full matrix: new setup, PostgreSQL mode, no-database mode, a business route registered only through `internal/app/routes.go`, tests, Docker, migrations, CI, automatic updates, route preservation, authentication, authorized internal errors, and secret/file absence checks. Publish `1.0.0` only after that repository passes from a clean start.
 
 ## Template maintenance and repository checklist
 
 Derived repositories need `TEMPLATE_UPDATE_TOKEN` with repository-scoped Contents, Workflows, and Pull requests read/write permissions, and GitHub Actions must be allowed to create pull requests. Application code belongs in modules under `internal/modules/` and is registered in `internal/app/routes.go`; template-managed operational files should remain unchanged unless intentionally modifying the template itself.
 
-The future update mechanism must include version detection, automatic PR creation in derived repositories, compatibility checks, a breaking-change log, and manual resolution of minimal application conflicts. After review and merge, mark both backend and frontend repositories as GitHub Template Repositories under `Settings -> General -> Template repository`.
+The update mechanism includes version detection, automatic PR creation in derived repositories, compatibility checks, a breaking-change log, and manual resolution of minimal application conflicts. `testing-template` remains the legacy regression fixture; `testing-templatev2` remains the clean-room acceptance fixture. After review and merge, mark both backend and frontend repositories as GitHub Template Repositories under `Settings -> General -> Template repository`.
 
 ## Explicit non-goals for this foundation release
 
-Google OAuth, public registration, password recovery, frontend implementation, cloud-provider-specific deployment, and the public internal error endpoint remain outside `0.2.5`. The repository license is Apache-2.0.
+Google OAuth, public registration, password recovery, frontend implementation, and cloud-provider-specific deployment remain outside the foundation releases. The internal error endpoint remains unregistered until authentication and authorization are implemented. The repository license is Apache-2.0.

@@ -9,7 +9,8 @@ The manifest is the source of truth for the template identity, version, source r
 - `cmd/template -command validate` validates the manifest contract.
 - `scripts/validate-template.sh` verifies required template files and blocks a real `.env` file.
 - CI runs the lifecycle validation and writes build outputs outside the repository root.
-- `scripts/template-update.sh` applies a three-way patch between recorded and target template commits.
+- `scripts/template-update.sh` applies a normalized direct patch when possible and falls back to a three-way patch between recorded and target template commits.
+- The updater imports source base blobs before a three-way patch, recognizes safely pre-applied files, and reports unapplied paths instead of accepting a partial update.
 - `.github/workflows/template-update.yml` detects version tags and opens derived-repository PRs with least-privilege write permissions.
 - The workflow accepts an optional `TEMPLATE_UPDATE_TOKEN` secret for updates that modify `.github/workflows` files.
 - Compatibility changes are rejected automatically; file deletions remain a manual migration.
@@ -20,16 +21,17 @@ The derived-repository workflow performs these steps:
 
 1. Detect the newest `vMAJOR.MINOR.PATCH` tag from `ThatSoftwareCompany/template-go-api`.
 2. Compare the generated repository's recorded `template_commit` and compatibility fields. The workflow uses a valid recorded source commit first and falls back to the version tag only when the recorded commit cannot be resolved in the template repository.
-3. Apply a three-way patch from the recorded commit to the tagged commit.
-4. Normalize the canonical Go module path to the generated repository's module path before applying source changes.
+3. Apply a normalized direct patch when the generated repository matches the update context; otherwise apply a three-way patch from the recorded commit to the tagged commit.
+4. Normalize the canonical Go module path to the generated repository's module path in Go changes without changing three-way merge context.
 5. Refuse incompatible Go/PostgreSQL changes and template file deletions.
-6. Record the new `template_version` and `template_commit`.
-7. Create an update pull request in the derived repository.
-8. Leave application-specific conflicts for manual resolution; it must never merge generated pull requests automatically.
+6. Refuse partial patches and report unresolved or unapplied paths.
+7. Record the new `template_version` and `template_commit` only after a complete update.
+8. Create an update pull request in the derived repository.
+9. Leave application-specific conflicts for manual resolution; it must never merge generated pull requests automatically.
 
 If a generated repository contains its own Git commit in `template_commit`, the workflow resolves the source commit from the matching release tag and opens a provenance-repair pull request.
 
-Repositories generated from versions before `v0.2.4` require a sequential bridge update before consuming `v0.2.5` or newer. The pre-`v0.2.4` updater could not normalize Go module paths in newly added files. If a direct update reports `no required module provides package github.com/ThatSoftwareCompany/template-go-api/internal/...`, close that update PR, apply `v0.2.4` manually with the current updater, merge it, and then run the automatic update again. The lifecycle suite exercises this bridge as `v0.2.3 -> v0.2.4 -> v0.2.5`; the recommended current target is `v0.2.9` because the immutable `v0.2.6`, `v0.2.7`, and `v0.2.8` tags predate the final lifecycle workflow correction.
+Repositories generated from versions before `v0.2.4` require a sequential bridge update before consuming `v0.2.5` or newer. The pre-`v0.2.4` updater could not normalize Go module paths in newly added files. If a direct update reports `no required module provides package github.com/ThatSoftwareCompany/template-go-api/internal/...`, close that update PR, apply `v0.2.4` manually with the current updater, merge it, and then run the automatic update again. The lifecycle suite exercises this bridge as `v0.2.3 -> v0.2.4 -> v0.2.5`; the recommended current target is the latest release because the immutable `v0.2.6`, `v0.2.7`, and `v0.2.8` tags predate the final lifecycle workflow correction.
 
 Repositories that already applied the lifecycle code but still use the pre-`v0.2.9` workflow detector require a one-time bootstrap. Create a small reviewed PR that updates `.github/workflows/template-update.yml` to the current template version while preserving the repository's `TEMPLATE_UPDATE_TOKEN` configuration. Merge that bootstrap PR, then run the automatic updater again. Do not resolve a full historical update by copying template-managed files over application changes.
 
@@ -68,7 +70,7 @@ Use a dedicated fine-grained personal access token or GitHub App installation to
 
 The workflow falls back to `GITHUB_TOKEN` when the secret is absent, which is sufficient only for updates that do not modify workflow files. Never commit the token or place it in `.env` files.
 
-If a generated repository already contains a manual token edit and the update reports a conflict in `.github/workflows/template-update.yml`, resolve the file by keeping the latest template detection/provenance logic and the `TEMPLATE_UPDATE_TOKEN` checkout and `GH_TOKEN` settings. Run `go test ./...`, `go vet ./...`, and `git diff --check` before committing the resolved update.
+If an update reports a conflict, inspect `git status` and the paths printed by the updater. Keep the latest template behavior and preserve intentional application changes; do not copy the entire template over the derived repository. For `.github/workflows/template-update.yml`, keep the latest detection/provenance logic together with the `TEMPLATE_UPDATE_TOKEN` checkout and `GH_TOKEN` settings. After resolving, stage the files, run `go test ./...`, `go vet ./...`, and `git diff --check`, then record provenance with `go run ./cmd/template -command record-provenance -template-version <version> -template-commit <commit>` before committing the reviewed update.
 
 ## Compatibility policy
 

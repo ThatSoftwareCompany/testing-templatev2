@@ -25,6 +25,8 @@ v022=$(git -C "$source_repository" rev-parse v0.2.2^{commit})
 v023=$(git -C "$source_repository" rev-parse v0.2.3^{commit})
 v024=$(git -C "$source_repository" rev-parse v0.2.4^{commit})
 v025=$(git -C "$source_repository" rev-parse v0.2.5^{commit})
+v027=$(git -C "$source_repository" rev-parse v0.2.7^{commit})
+v029=$(git -C "$source_repository" rev-parse v0.2.9^{commit})
 source_module_path=$(awk '$1 == "module" { print $2; exit }' "$source_repository/go.mod")
 if [[ -z "$source_module_path" ]]; then
 	echo "unable to resolve the source Go module path" >&2
@@ -169,6 +171,83 @@ run_update_test() {
 	GOCACHE="${temporary}/update-cache" go -C "$directory" test ./...
 }
 
+run_preapplied_file_update_test() {
+	local directory="${temporary}/preapplied-derived"
+	extract_tag v0.2.9 "$directory"
+	initialize_repository "$directory"
+
+	(
+		cd "$directory"
+		GOCACHE="${temporary}/preapplied-cache" go run ./cmd/template \
+			-command record-provenance \
+			-template-version "0.2.6" \
+			-template-commit "$v027"
+	)
+	sed -i '1c# testing-templatev2' "$directory/README.md"
+	sed -i '3cReusable Go API foundation for clean-room template validation.' "$directory/README.md"
+	printf '\n\n' >> "$directory/.github/workflows/template-update.yml"
+	printf '\n<!-- Application-owned lifecycle validation note. -->\n' >> "$directory/docs/template-maintenance.md"
+	git -C "$directory" add .
+	git -C "$directory" commit -qm "test: configure preapplied repository"
+
+	"$repo_root/scripts/template-update.sh" \
+		--project-root "$directory" \
+		--template-repository "$source_repository" \
+		--from-commit "$v027" \
+		--to-commit "$v029"
+
+	jq -e '.template_version == "0.2.9" and .template_commit == "'"$v029"'"' \
+		"$directory/.template/manifest.json" >/dev/null
+	GOCACHE="${temporary}/preapplied-cache" go -C "$directory" test ./...
+	grep -Fq '# testing-templatev2' "$directory/README.md"
+	grep -Fq '<!-- Application-owned lifecycle validation note. -->' "$directory/docs/template-maintenance.md"
+}
+
+run_conflicting_file_test() {
+	local directory="${temporary}/conflicting-derived"
+	extract_tag v0.2.7 "$directory"
+	initialize_repository "$directory"
+
+	(
+		cd "$directory"
+		GOCACHE="${temporary}/conflict-cache" go run ./cmd/template \
+			-command record-provenance \
+			-template-version "0.2.6" \
+			-template-commit "$v027"
+	)
+	sed -i 's|github.com/ThatSoftwareCompany/template-go-api/internal/|github.com/example/conflicting-derived/internal/|' \
+		"$directory/docs/template-maintenance.md"
+	git -C "$directory" add .
+	git -C "$directory" commit -qm "test: customize conflicting template documentation"
+
+	set +e
+	"$repo_root/scripts/template-update.sh" \
+		--project-root "$directory" \
+		--template-repository "$source_repository" \
+		--from-commit "$v027" \
+		--to-commit "$v029" >"${directory}.log" 2>&1
+	local status=$?
+	set -e
+	[[ "$status" -ne 0 ]] || { echo "conflicting update was unexpectedly accepted" >&2; cat "${directory}.log" >&2; exit 1; }
+	grep -Fq "Template update has unresolved or unapplied changes in:" "${directory}.log" || {
+		echo "conflicting update did not report unresolved or unapplied changes" >&2
+		cat "${directory}.log" >&2
+		exit 1
+	}
+	grep -Fq "docs/template-maintenance.md" "${directory}.log" || {
+		echo "conflicting update did not report the affected path" >&2
+		cat "${directory}.log" >&2
+		exit 1
+	}
+	grep -Fq "Resolve these files manually" "${directory}.log" || {
+		echo "conflicting update did not report the manual resolution guidance" >&2
+		cat "${directory}.log" >&2
+		exit 1
+	}
+	jq -e '.template_version == "0.2.6" and .template_commit == "'"$v027"'"' \
+		"$directory/.template/manifest.json" >/dev/null
+}
+
 run_legacy_bootstrap_test() {
 	local directory="${temporary}/legacy-derived"
 	extract_tag v0.2.2 "$directory"
@@ -252,6 +331,8 @@ run_deletion_update_test() {
 run_setup_idempotency_test
 run_setup_enabled_database_test
 run_update_test
+run_preapplied_file_update_test
+run_conflicting_file_test
 run_legacy_bootstrap_test
 run_incompatible_update_test
 run_deletion_update_test

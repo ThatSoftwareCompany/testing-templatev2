@@ -2,6 +2,7 @@ package config
 
 import (
 	"testing"
+	"time"
 )
 
 func TestLoadUsesPostgresByDefault(t *testing.T) {
@@ -14,6 +15,17 @@ func TestLoadUsesPostgresByDefault(t *testing.T) {
 	}
 	if !cfg.Database.Enabled {
 		t.Fatal("expected PostgreSQL to be enabled by default")
+	}
+}
+
+func TestLoadUsesAuthenticationDefaults(t *testing.T) {
+	setBaseEnvironment(t)
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.Auth.AccessTokenTTL != 15*time.Minute || cfg.Auth.RefreshTokenTTL != 30*24*time.Hour {
+		t.Fatalf("unexpected authentication defaults: %#v", cfg.Auth)
 	}
 }
 
@@ -87,6 +99,50 @@ func TestLoadRejectsInvalidConnectionBounds(t *testing.T) {
 
 	if _, err := Load(); err == nil {
 		t.Fatal("expected invalid connection bounds to fail")
+	}
+}
+
+func TestLoadRejectsRefreshTokenTTLOutsideAllowedRange(t *testing.T) {
+	setBaseEnvironment(t)
+	t.Setenv("AUTH_REFRESH_TOKEN_TTL", "6d")
+	if _, err := Load(); err == nil {
+		t.Fatal("expected short refresh token TTL to fail validation")
+	}
+}
+
+func TestValidateAuthRuntimeRequiresConfigurationWhenDatabaseIsEnabled(t *testing.T) {
+	setBaseEnvironment(t)
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if err := cfg.ValidateAuthRuntime(); err == nil {
+		t.Fatal("expected authentication runtime configuration to be required")
+	}
+}
+
+func TestValidateAuthRuntimeAllowsDatabaseDisabledMode(t *testing.T) {
+	setBaseEnvironment(t)
+	t.Setenv("DATABASE_ENABLED", "false")
+	t.Setenv("DATABASE_URL", "")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if err := cfg.ValidateAuthRuntime(); err != nil {
+		t.Fatalf("expected disabled database mode to skip auth runtime requirements: %v", err)
+	}
+}
+
+func TestValidateAuthRuntimeRejectsInvalidJWTMetadata(t *testing.T) {
+	setBaseEnvironment(t)
+	t.Setenv("AUTH_KEY_ID", "key id")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if err := cfg.ValidateAuthRuntime(); err == nil {
+		t.Fatal("expected invalid auth metadata to fail runtime validation")
 	}
 }
 

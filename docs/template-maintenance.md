@@ -45,6 +45,12 @@ Product-specific code belongs in new business modules under `internal/modules/<b
 
 The exception is maintenance of the canonical template itself. Template maintainers may change managed files when implementing a deliberate template, security, test, documentation, or lifecycle change, with the corresponding version, validation, and review updates.
 
+## Authentication release migration
+
+`v0.3.0` adds template-managed authentication infrastructure and the second SQL migration. A derived repository consuming this release must apply migrations before starting a database-backed API. It must also provide `AUTH_PRIVATE_KEY_FILE`, `AUTH_PUBLIC_KEY_FILE`, `AUTH_KEY_ID`, `AUTH_JWT_ISSUER`, `AUTH_JWT_AUDIENCE`, and an `AUTH_CSRF_SECRET` containing at least 32 bytes. Generate local development keys with `scripts/generate-dev-auth-keys.sh`; production keys and secrets must be mounted outside the repository.
+
+The release changes the internal errors route from documented-only to registered and protected. Preserve its `RequirePermission(..., "errors:read", ...)` boundary. Do not expose it directly or add implicit administrator permissions. Existing derived applications should review cookie, CORS, migration, and environment changes in the generated update PR before merging.
+
 ## Derived repository onboarding checklist
 
 Complete this checklist after generating a repository from the template and before running the scheduled or manual update workflow:

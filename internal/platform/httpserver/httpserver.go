@@ -215,8 +215,8 @@ func CORS(allowedOrigins []string, next http.Handler) http.Handler {
 			w.Header().Add("Vary", "Origin")
 			w.Header().Set("Access-Control-Allow-Origin", origin)
 			w.Header().Set("Access-Control-Allow-Credentials", "true")
-			w.Header().Set("Access-Control-Allow-Methods", "GET, OPTIONS")
-			w.Header().Set("Access-Control-Allow-Headers", "Accept, Content-Type, X-Correlation-ID")
+			w.Header().Set("Access-Control-Allow-Methods", "GET, OPTIONS, POST")
+			w.Header().Set("Access-Control-Allow-Headers", "Accept, Content-Type, X-Correlation-ID, X-CSRF-Token")
 			if r.Method == http.MethodOptions {
 				w.WriteHeader(http.StatusNoContent)
 				return

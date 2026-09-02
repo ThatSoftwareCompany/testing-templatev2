@@ -60,6 +60,9 @@ jobs:
       - name: Build migration CLI
         run: go build -o "$RUNNER_TEMP/template-migrate" ./cmd/migrate
 
+      - name: Build authentication CLI
+        run: go build -o "$RUNNER_TEMP/template-auth" ./cmd/auth
+
       - name: Build template CLI
         run: go build -o "$RUNNER_TEMP/template" ./cmd/template
 
@@ -118,10 +121,30 @@ jobs:
           POSTGRES_DB: test_db
         run: |
           set -euo pipefail
+          auth_dir="$RUNNER_TEMP/auth-keys"
+          mkdir -p "$auth_dir"
+          openssl genpkey -algorithm Ed25519 -out "$auth_dir/private.pem" >/dev/null 2>&1
+          openssl pkey -in "$auth_dir/private.pem" -pubout -out "$auth_dir/public.pem" >/dev/null 2>&1
+          export AUTH_PRIVATE_KEY_FILE="$auth_dir/private.pem"
+          export AUTH_PUBLIC_KEY_FILE="$auth_dir/public.pem"
+          export AUTH_CSRF_SECRET="$(openssl rand -hex 32)"
           docker compose up --build -d
           for attempt in $(seq 1 30); do
             if curl --fail --silent http://127.0.0.1:8080/__ping >/dev/null && \
               curl --fail --silent http://127.0.0.1:8080/api/v1/health >/dev/null; then
+              csrf_status=$(curl --silent --show-error --output "$RUNNER_TEMP/auth-csrf.json" \
+                --dump-header "$RUNNER_TEMP/auth-csrf.headers" \
+                --cookie-jar "$RUNNER_TEMP/auth-cookies" \
+                --write-out '%{http_code}' \
+                http://127.0.0.1:8080/api/v1/auth/csrf)
+              test "$csrf_status" = "200"
+              grep -Fq 'tsc_csrf_token' "$RUNNER_TEMP/auth-cookies"
+              me_status=$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' \
+                http://127.0.0.1:8080/api/v1/auth/me)
+              test "$me_status" = "401"
+              errors_status=$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' \
+                http://127.0.0.1:8080/api/v1/internal/errors)
+              test "$errors_status" = "401"
               exit 0
             fi
             sleep 2
@@ -136,6 +159,9 @@ jobs:
           POSTGRES_USER: test_user
           POSTGRES_PASSWORD: test_password
           POSTGRES_DB: test_db
+          AUTH_PRIVATE_KEY_FILE: ${{ runner.temp }}/auth-keys/private.pem
+          AUTH_PUBLIC_KEY_FILE: ${{ runner.temp }}/auth-keys/public.pem
+          AUTH_CSRF_SECRET: cleanup-only-placeholder
         run: docker compose down -v
 
       - name: Smoke test production image without PostgreSQL

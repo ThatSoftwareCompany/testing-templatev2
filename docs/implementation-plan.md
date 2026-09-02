@@ -67,7 +67,7 @@ The updater must distinguish clean generated repositories, repositories with har
 
 Acceptance criteria: the lifecycle suite passes, the actual `testing-template` history can be repaired with a reviewed migration, and a clean `testing-templatev2` repository can consume the release without historical conflicts.
 
-## `0.3.0` — authentication and authorization
+## `0.3.0` — authentication and authorization (current implementation)
 
 Add the documented auth contract:
 
@@ -84,10 +84,12 @@ There is no public registration, password recovery, or Google OAuth in this rele
 - Refresh token: opaque cryptographically random value, stored only as a hash in PostgreSQL, with family tracking, rotation, revocation, and reuse detection; initial lifetime approximately 30 days.
 - Both tokens use HttpOnly cookies. `Secure=false` and `SameSite=Lax` apply in development/test; `Secure=true` and `SameSite=Strict` apply in production. Cookies have no `Domain` attribute.
 - Signed double-submit CSRF protection uses `X-CSRF-Token`; mutable authenticated operations require it.
-- Add `users`, `refresh_tokens`, and `login_attempts` migrations. Passwords are 15–128 characters, without artificial composition rules, and use Argon2id with benchmarked initial parameters of 64 MiB, 3 iterations, and parallelism 1.
+- Add `users`, `roles`, `permissions`, `user_roles`, `role_permissions`, `refresh_tokens`, and `login_attempts` migrations. Passwords are 15–128 characters, without artificial composition rules, and use Argon2id with benchmarked initial parameters of 64 MiB, 3 iterations, and parallelism 1.
 - Login rate limiting is distributed through PostgreSQL and login failures use generic responses to prevent account enumeration.
-- PEM-mounted Ed25519 keys use `AUTH_PRIVATE_KEY_FILE`, `AUTH_PUBLIC_KEY_FILE`, `AUTH_KEY_ID`, `AUTH_JWT_ISSUER`, and `AUTH_JWT_AUDIENCE`.
+- PEM-mounted Ed25519 keys use `AUTH_PRIVATE_KEY_FILE`, `AUTH_PUBLIC_KEY_FILE`, `AUTH_KEY_ID`, `AUTH_JWT_ISSUER`, and `AUTH_JWT_AUDIENCE`; signed CSRF tokens use `AUTH_CSRF_SECRET`. `AUTH_ACCESS_TOKEN_TTL` defaults to `15m` and `AUTH_REFRESH_TOKEN_TTL` defaults to `720h`, constrained to 7–30 days.
 - Authorization is deny-by-default. The internal error endpoint requires the explicit `errors:read` permission.
+
+Implementation acceptance criteria: the auth module is isolated under `internal/modules/auth`; database-backed startup fails fast for missing or invalid auth configuration; database-disabled startup remains available with auth endpoints returning `503`; the admin CLI creates the initial user and grants only the explicit `internal_admin` role and `errors:read` permission; all session tokens remain in HttpOnly cookies; and unit, HTTP, and PostgreSQL integration coverage exercises the security contract.
 
 ## `0.4.0` — supply-chain security and lifecycle
 
@@ -119,6 +121,6 @@ Derived repositories need `TEMPLATE_UPDATE_TOKEN` with repository-scoped Content
 
 The update mechanism includes version detection, automatic PR creation in derived repositories, compatibility checks, a breaking-change log, and manual resolution of minimal application conflicts. `testing-template` remains the legacy regression fixture; `testing-templatev2` remains the clean-room acceptance fixture. After review and merge, mark both backend and frontend repositories as GitHub Template Repositories under `Settings -> General -> Template repository`.
 
-## Explicit non-goals for this foundation release
+## Explicit non-goals for the current backend release
 
-Google OAuth, public registration, password recovery, frontend implementation, and cloud-provider-specific deployment remain outside the foundation releases. The internal error endpoint remains unregistered until authentication and authorization are implemented. The repository license is Apache-2.0.
+Google OAuth, public registration, password recovery, frontend implementation, and cloud-provider-specific deployment remain outside this release. The repository license is Apache-2.0. The next release focuses on supply-chain security and lifecycle improvements; same-origin deployment remains planned for `0.5.0`.

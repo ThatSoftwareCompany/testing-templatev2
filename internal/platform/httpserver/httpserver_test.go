@@ -149,6 +149,8 @@ func TestCorsPreflightReturnsNoContentForAllowedOrigin(t *testing.T) {
 	server := NewServer(testConfig(), slog.New(slog.NewJSONHandler(testWriter{t}, nil)), errstore.NewNoopStore())
 	request := httptest.NewRequest(http.MethodOptions, "/api/v1/health", nil)
 	request.Header.Set("Origin", "http://frontend.test")
+	request.Header.Set("Access-Control-Request-Method", http.MethodPost)
+	request.Header.Set("Access-Control-Request-Headers", "X-CSRF-Token")
 	recorder := httptest.NewRecorder()
 	server.HTTP.Handler.ServeHTTP(recorder, request)
 
@@ -157,6 +159,12 @@ func TestCorsPreflightReturnsNoContentForAllowedOrigin(t *testing.T) {
 	}
 	if recorder.Header().Get("Access-Control-Allow-Origin") != "http://frontend.test" {
 		t.Fatalf("unexpected allowed origin: %q", recorder.Header().Get("Access-Control-Allow-Origin"))
+	}
+	if recorder.Header().Get("Access-Control-Allow-Methods") != "GET, OPTIONS, POST" {
+		t.Fatalf("unexpected allowed methods: %q", recorder.Header().Get("Access-Control-Allow-Methods"))
+	}
+	if !strings.Contains(recorder.Header().Get("Access-Control-Allow-Headers"), "X-CSRF-Token") {
+		t.Fatalf("CSRF header is not allowed: %q", recorder.Header().Get("Access-Control-Allow-Headers"))
 	}
 }
 

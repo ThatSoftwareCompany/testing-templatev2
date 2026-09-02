@@ -10,13 +10,21 @@ Reusable Go API foundation for That Software Company. The generated application 
 
 ## Local execution
 
-PostgreSQL is enabled by default and `DATABASE_URL` is required in that mode. Copy `.env.example` to a local `.env` outside version control, set the database values, and export them before starting:
+PostgreSQL and authentication are enabled by default. `DATABASE_URL`, Ed25519 PEM files, JWT metadata, and a CSRF secret are required in that mode. Copy `.env.example` to a local `.env` outside version control, set the database values, generate development keys, set `AUTH_CSRF_SECRET` in the shell, and export the variables before starting:
 
 ```bash
+./scripts/generate-dev-auth-keys.sh
 set -a
 source .env
 set +a
+export AUTH_CSRF_SECRET="$(openssl rand -hex 32)"
 go run ./cmd/api
+```
+
+The key generator writes only to the ignored `.local/auth/` directory and never overwrites existing files. Production keys must be mounted by a secret manager or protected volume; never commit them. The interactive administrator command requires PostgreSQL and prompts for the password without echoing it:
+
+```bash
+go run ./cmd/auth -command create-admin
 ```
 
 To run the API without PostgreSQL:
@@ -29,9 +37,10 @@ The application validates all environment variables at startup. `APP_ENV` must b
 
 ## Docker Compose
 
-Set the local-only `POSTGRES_USER`, `POSTGRES_PASSWORD`, and `POSTGRES_DB` variables in your shell or a local `.env` file, then run:
+Set the local-only `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB`, and `AUTH_CSRF_SECRET` variables in your shell or a local `.env` file. Generate the development key files before running:
 
 ```bash
+./scripts/generate-dev-auth-keys.sh
 docker compose up --build
 ```
 
@@ -51,12 +60,16 @@ go run ./cmd/migrate -command down -steps 1
 go run ./cmd/migrate -command version
 ```
 
-The migration directory uses normal `.up.sql` and `.down.sql` files. The current foundation creates `error_events`.
+The migration directory uses normal `.up.sql` and `.down.sql` files. The migrations create `error_events` and the authentication schema (`users`, roles, permissions, refresh-token families, and login attempts).
 
 ## Operational endpoints
 
 - `GET /__ping` checks only that the process is alive. It never queries PostgreSQL.
 - `GET /api/v1/health` checks readiness. It reports `database: "disabled"`, `"up"`, or `"down"`; the latter returns HTTP 503 without exposing failure details.
+- `GET /api/v1/auth/csrf` issues a signed CSRF token.
+- `POST /api/v1/auth/login`, `/refresh`, and `/logout` use CSRF-protected cookies; tokens are never returned in JSON.
+- `GET /api/v1/auth/me` returns the authenticated user, roles, and permissions.
+- `GET /api/v1/internal/errors?endpoint=<path>` requires an access cookie and the explicit `errors:read` permission.
 
 Every response includes a validated `X-Correlation-ID`. Error responses include the same value in the JSON error object.
 
@@ -69,7 +82,8 @@ routes -> controller -> service -> repository/client
 ```
 
 - `internal/modules/health` owns health transport and readiness rules.
-- `internal/modules/errors` prepares the future internal error use case.
+- `internal/modules/auth` owns administrator provisioning, password hashing, session tokens, CSRF, and authorization middleware.
+- `internal/modules/errors` owns safe error listing behind authentication and `errors:read` authorization.
 - `internal/app/routes.go` is the application-owned extension point for registering product modules.
 - `internal/platform` owns configuration, HTTP, logging, PostgreSQL, migrations, and safe error storage.
 - `repository` is reserved for persistence.
@@ -83,9 +97,11 @@ The template owns the operational composition in `cmd/api`, including `/__ping` 
 
 The foundation emits structured JSON logs through `log/slog`, security headers, an explicit CORS allowlist, and correlation IDs. It never logs request bodies, authorization headers, cookies, passwords, tokens, or secrets. Persisted HTTP 5xx events contain only the safe fields documented by the `error_events` migration.
 
+Authentication uses Argon2id for 15–128-character passwords, Ed25519/EdDSA JWT access tokens with a 15-minute lifetime, and opaque refresh tokens with a 30-day default lifetime. Refresh tokens are stored only as hashes, rotated, revoked by family, and invalidated on reuse. Session cookies are HttpOnly, have no `Domain`, use `Secure=false`/`SameSite=Lax` in development and test, and `Secure=true`/`SameSite=Strict` in production. Login, refresh, and logout require the signed double-submit CSRF token in `X-CSRF-Token`.
+
 In production, frontend and backend should be served under the same public origin. CORS credentials are enabled only for explicitly allowed origins; `*` is never accepted.
 
-The internal error listing route is intentionally not registered until authentication and authorization exist.
+When PostgreSQL is disabled, the API still starts and operational endpoints remain available; authentication endpoints return `503 service_unavailable` because no user store exists.
 
 ## Tests and quality checks
 
@@ -97,6 +113,7 @@ go vet ./...
 go test ./...
 go test -race ./...
 go build ./cmd/api
+go build ./cmd/auth
 go build ./cmd/migrate
 go build ./cmd/template
 
@@ -164,16 +181,15 @@ If an update reports a conflict in `.github/workflows/template-update.yml`, pres
 
 The template maintainer must publish version tags such as `v0.1.0` before derived repositories can detect releases. The initial release tag should point to the merged template commit.
 
-## Planned phases
+## Release roadmap
 
-The current foundation release is `0.2.10`, which includes the `0.2.5` hardening work, lifecycle module-normalization and legacy bridge fixes, provenance detection for immutable release tags, and safer handling of pre-applied files and merge failures. The immutable `v0.2.6`, `v0.2.7`, and `v0.2.8` tags were created before the final lifecycle workflow correction; new generated repositories should use the latest release tag. The next planned releases are:
+The current release is `0.3.0`, which adds cookie-based authentication, authorization, CSRF protection, rotating refresh tokens, the protected internal error endpoint, and the administrator provisioning CLI. The immutable `v0.2.6`, `v0.2.7`, and `v0.2.8` tags remain historical; new generated repositories should use the latest release tag. The next planned releases are:
 
-- `0.3.0`: administrated login, Argon2id, Ed25519/EdDSA JWTs, approximately 15-minute access tokens, 30-day rotating/revocable refresh tokens, HttpOnly cookies, environment-specific Secure and SameSite policies, CSRF protection, authentication/authorization middleware, and authorized access to `/api/v1/internal/errors?endpoint=<path>`.
 - `0.4.0`: Dependabot, dependency review, `govulncheck`, Docker image scanning, strict `go.sum` checks, full-SHA Actions pinning, release notes, and safer updater conflict reporting.
 - `0.5.0`: provider-agnostic same-origin deployment contract and trusted reverse-proxy configuration.
 - `1.0.0`: final validation from a clean `testing-templatev2` repository.
 
-Google OAuth, public registration, password recovery, and frontend implementation are not part of the current backend foundation.
+Public registration, password recovery, Google OAuth, frontend implementation, and cloud-provider-specific deployment are not part of the current backend template.
 
 After review and merge, the backend and frontend repositories must be marked as GitHub Template Repositories from `Settings -> General -> Template repository`. This is a post-merge checklist item, not an automated repository mutation.
 

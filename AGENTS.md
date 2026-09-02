@@ -16,13 +16,17 @@ This repository is the canonical backend template for That Software Company. It 
 ## Architecture
 
 - `cmd/api` composes configuration, platform services, modules, and graceful shutdown.
+- `cmd/auth` provides the interactive administrator provisioning command.
 - `internal/app/routes.go` is the application-owned route composition extension point.
 - `cmd/migrate` is the explicit SQL migration CLI.
 - `internal/modules/<module>` contains module transport and business responsibilities.
+- `internal/modules/auth` owns authentication, authorization middleware, token and CSRF rules, and its persistence boundary.
 - `internal/platform` contains shared infrastructure only: configuration, PostgreSQL, HTTP, logging, error storage, and migrations.
 - The public API is versioned under `/api/v1`.
 - `/__ping` is a process liveness check and never queries PostgreSQL.
 - `/api/v1/health` is a readiness check and reports PostgreSQL state without exposing failure details.
+- `/api/v1/auth/*` owns cookie-based login, refresh, logout, CSRF, and the authenticated user contract.
+- `/api/v1/internal/errors` is registered only behind authentication and the explicit `errors:read` permission.
 
 ## Template-managed files and extension points
 
@@ -33,6 +37,7 @@ Generated repositories must keep template-managed infrastructure intact so templ
 - `internal/platform/**`
 - `internal/modules/health/**`
 - `internal/modules/errors/**`
+- `internal/modules/auth/**`
 - `.github/workflows/**`
 - `Dockerfile`, `compose.yaml`, `.dockerignore`, and `.env.example`
 - `migrations/**`, `scripts/**`, `.template/**`, and the root CI/documentation files
@@ -47,7 +52,9 @@ The exception is intentional maintenance of the canonical template itself, inclu
 - Validate and return `X-Correlation-ID`; do not reflect untrusted header values without validation.
 - Persist only the safe `error_events` fields defined in the migration. Never persist raw SQL errors, stack traces, request bodies, or credentials.
 - CORS must use an explicit origin allowlist. Never emit `Access-Control-Allow-Origin: *` when credentials are enabled.
-- Authentication is planned for a later phase. Do not expose the internal error listing endpoint before authentication and authorization exist.
+- Authentication uses Argon2id passwords, Ed25519/EdDSA access JWTs, opaque hashed rotating refresh tokens, HttpOnly cookies, and signed double-submit CSRF tokens. Do not introduce token storage in browser storage or return tokens in JSON.
+- Authorization is deny-by-default. Do not bypass `RequireAuthentication` or `RequirePermission`, and do not grant permissions implicitly through a role name.
+- The internal error listing endpoint must remain protected by the explicit `errors:read` permission.
 
 ## Validation commands
 
@@ -61,6 +68,7 @@ go mod tidy
 go mod verify
 go run ./cmd/template -command validate
 go build ./cmd/api
+go build ./cmd/auth
 go build ./cmd/migrate
 ```
 

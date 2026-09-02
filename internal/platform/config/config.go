@@ -28,6 +28,7 @@ type Config struct {
 	MigrationsDir          string
 	MigrationsRunOnStartup bool
 	CORSAllowedOrigins     []string
+	Auth                   AuthConfig
 }
 
 type DatabaseConfig struct {
@@ -36,6 +37,17 @@ type DatabaseConfig struct {
 	MaxConns      int32
 	MinConns      int32
 	HealthTimeout time.Duration
+}
+
+type AuthConfig struct {
+	PrivateKeyFile  string
+	PublicKeyFile   string
+	KeyID           string
+	JWTIssuer       string
+	JWTAudience     string
+	CSRFSecret      string
+	AccessTokenTTL  time.Duration
+	RefreshTokenTTL time.Duration
 }
 
 func Load() (Config, error) {
@@ -78,6 +90,18 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 	if cfg.CORSAllowedOrigins, err = originsEnv("CORS_ALLOWED_ORIGINS"); err != nil {
+		return Config{}, err
+	}
+	cfg.Auth.PrivateKeyFile = strings.TrimSpace(os.Getenv("AUTH_PRIVATE_KEY_FILE"))
+	cfg.Auth.PublicKeyFile = strings.TrimSpace(os.Getenv("AUTH_PUBLIC_KEY_FILE"))
+	cfg.Auth.KeyID = strings.TrimSpace(os.Getenv("AUTH_KEY_ID"))
+	cfg.Auth.JWTIssuer = strings.TrimSpace(os.Getenv("AUTH_JWT_ISSUER"))
+	cfg.Auth.JWTAudience = strings.TrimSpace(os.Getenv("AUTH_JWT_AUDIENCE"))
+	cfg.Auth.CSRFSecret = os.Getenv("AUTH_CSRF_SECRET")
+	if cfg.Auth.AccessTokenTTL, err = durationEnv("AUTH_ACCESS_TOKEN_TTL", 15*time.Minute); err != nil {
+		return Config{}, err
+	}
+	if cfg.Auth.RefreshTokenTTL, err = durationEnv("AUTH_REFRESH_TOKEN_TTL", 30*24*time.Hour); err != nil {
 		return Config{}, err
 	}
 
@@ -128,7 +152,53 @@ func (c Config) Validate() error {
 	if strings.TrimSpace(c.MigrationsDir) == "" {
 		return fmt.Errorf("MIGRATIONS_DIR must not be empty")
 	}
+	if c.Auth.AccessTokenTTL <= 0 {
+		return fmt.Errorf("AUTH_ACCESS_TOKEN_TTL must be greater than zero")
+	}
+	if c.Auth.RefreshTokenTTL < 7*24*time.Hour || c.Auth.RefreshTokenTTL > 30*24*time.Hour {
+		return fmt.Errorf("AUTH_REFRESH_TOKEN_TTL must be between 7 and 30 days")
+	}
 	return nil
+}
+
+func (c Config) ValidateAuthRuntime() error {
+	if !c.Database.Enabled {
+		return nil
+	}
+	for _, field := range []struct {
+		name     string
+		value    string
+		metadata bool
+	}{
+		{name: "AUTH_PRIVATE_KEY_FILE", value: c.Auth.PrivateKeyFile},
+		{name: "AUTH_PUBLIC_KEY_FILE", value: c.Auth.PublicKeyFile},
+		{name: "AUTH_KEY_ID", value: c.Auth.KeyID, metadata: true},
+		{name: "AUTH_JWT_ISSUER", value: c.Auth.JWTIssuer, metadata: true},
+		{name: "AUTH_JWT_AUDIENCE", value: c.Auth.JWTAudience, metadata: true},
+	} {
+		if strings.TrimSpace(field.value) == "" {
+			return fmt.Errorf("%s is required when DATABASE_ENABLED=true", field.name)
+		}
+		if field.metadata && !validAuthMetadata(field.value) {
+			return fmt.Errorf("%s contains invalid characters", field.name)
+		}
+	}
+	if len([]byte(c.Auth.CSRFSecret)) < 32 {
+		return fmt.Errorf("AUTH_CSRF_SECRET must contain at least 32 bytes when DATABASE_ENABLED=true")
+	}
+	return nil
+}
+
+func validAuthMetadata(value string) bool {
+	if strings.TrimSpace(value) != value {
+		return false
+	}
+	for _, character := range value {
+		if character == '\u0000' || character == '\u007f' || character < ' ' || character == ' ' {
+			return false
+		}
+	}
+	return true
 }
 
 func (c Config) MigrationURLRequired() error {

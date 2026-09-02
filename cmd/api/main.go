@@ -10,6 +10,8 @@ import (
 	"syscall"
 
 	"github.com/ThatSoftwareCompany/testing-templatev2/internal/app"
+	"github.com/ThatSoftwareCompany/testing-templatev2/internal/modules/auth"
+	errorsmodule "github.com/ThatSoftwareCompany/testing-templatev2/internal/modules/errors"
 	"github.com/ThatSoftwareCompany/testing-templatev2/internal/modules/health"
 	"github.com/ThatSoftwareCompany/testing-templatev2/internal/platform/config"
 	"github.com/ThatSoftwareCompany/testing-templatev2/internal/platform/db"
@@ -39,6 +41,26 @@ func run(cfg config.Config, logger *slog.Logger) error {
 	rootContext, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	var tokenManager *auth.TokenManager
+	if cfg.Database.Enabled {
+		if err := cfg.ValidateAuthRuntime(); err != nil {
+			logger.Error("authentication_configuration_invalid", "reason", "required_authentication_configuration_missing_or_invalid")
+			return err
+		}
+		var err error
+		tokenManager, err = auth.LoadTokenManager(
+			cfg.Auth.PrivateKeyFile,
+			cfg.Auth.PublicKeyFile,
+			cfg.Auth.KeyID,
+			cfg.Auth.JWTIssuer,
+			cfg.Auth.JWTAudience,
+		)
+		if err != nil {
+			logger.Error("authentication_keys_invalid", "reason", "authentication_keys_could_not_be_loaded")
+			return err
+		}
+	}
+
 	if cfg.MigrationsRunOnStartup {
 		if err := platformmigrate.Up(platformmigrate.Config{
 			DatabaseURL:   cfg.Database.URL,
@@ -65,6 +87,19 @@ func run(cfg config.Config, logger *slog.Logger) error {
 	if pool != nil {
 		store = errstore.NewPostgresStore(pool)
 	}
+	var authRepository auth.Repository
+	if pool != nil {
+		authRepository = auth.NewPostgresRepository(pool)
+	}
+	authService := auth.NewService(
+		authRepository,
+		tokenManager,
+		cfg.Auth.CSRFSecret,
+		cfg.Auth.AccessTokenTTL,
+		cfg.Auth.RefreshTokenTTL,
+		cfg.AppEnv == config.Production,
+		cookieSameSite(cfg.AppEnv),
+	)
 
 	server := httpserver.NewServer(cfg, logger, store)
 	server.Mux.Handle("/__ping", httpserver.OnlyMethods(http.MethodGet)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -75,6 +110,11 @@ func run(cfg config.Config, logger *slog.Logger) error {
 		healthPinger = pool
 	}
 	health.RegisterRoutes(server.Mux, health.NewService(healthPinger, cfg.Database.HealthTimeout))
+	auth.RegisterRoutes(server.Mux, authService)
+	errorController := errorsmodule.NewController(errorsmodule.NewService(store))
+	server.Mux.Handle("/api/v1/internal/errors", httpserver.OnlyMethods(http.MethodGet)(
+		auth.RequirePermission(authService, "errors:read", http.HandlerFunc(errorController.HandleList)),
+	))
 	// Template-managed operational routes are registered above. Application-owned
 	// routes belong in internal/app/routes.go to keep template updates isolated.
 	app.RegisterRoutes(server.Mux, app.Dependencies{
@@ -104,4 +144,11 @@ func run(cfg config.Config, logger *slog.Logger) error {
 		}
 		return nil
 	}
+}
+
+func cookieSameSite(environment string) http.SameSite {
+	if environment == config.Production {
+		return http.SameSiteStrictMode
+	}
+	return http.SameSiteLaxMode
 }

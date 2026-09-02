@@ -25,6 +25,7 @@ required_files=(
   "migrations/000001_create_error_events.down.sql"
   "migrations/000002_create_authentication.up.sql"
   "migrations/000002_create_authentication.down.sql"
+  "scripts/generate-dev-auth-keys.sh"
   "scripts/template-update.sh"
 )
 
@@ -34,6 +35,11 @@ for relative_file in "${required_files[@]}"; do
     exit 1
   fi
 done
+
+if [[ ! -x "${repo_root}/scripts/generate-dev-auth-keys.sh" ]]; then
+  echo "development authentication key generator must be executable" >&2
+  exit 1
+fi
 
 if [[ -e "${repo_root}/.env" ]]; then
   echo "a real .env file must not be committed to the template" >&2

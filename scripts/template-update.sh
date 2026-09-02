@@ -87,7 +87,7 @@ resolve_tag_commit() {
   printf '%s' "$commit"
 }
 
-for command in git jq go; do
+for command in cmp git jq go; do
   if ! command -v "$command" >/dev/null 2>&1; then
     echo "required command is missing: ${command}" >&2
     exit 1
@@ -174,11 +174,67 @@ if [[ -n "$deleted_files" ]]; then
   exit 1
 fi
 
-git -C "$source_dir" diff --binary --find-renames "$from_commit" "$to_commit" -- "${template_pathspecs[@]}" > "$patch_file"
+already_applied_paths=()
+normalize_for_comparison() {
+	local path=$1
+	local input=$2
+	local output=$3
+
+	if [[ "$path" == "go.mod" || "$path" == *.go ]]; then
+		awk -v source_module="$source_module_path" -v target_module="$target_module_path" '
+      function replace_literal(value, source, target, position) {
+        while ((position = index(value, source)) > 0) {
+          value = substr(value, 1, position - 1) target substr(value, position + length(source))
+        }
+        return value
+      }
+
+      {
+        print replace_literal($0, source_module, target_module)
+      }
+    ' "$input" > "$output"
+	elif [[ "$path" == *.yaml || "$path" == *.yml ]]; then
+		sed -e 's/\r$//' -e '/^[[:space:]]*$/d' -e 's/[[:space:]]*$//' "$input" > "$output"
+	else
+		sed 's/\r$//' "$input" > "$output"
+	fi
+}
+
+while IFS= read -r -d '' path; do
+	current_file="${repo_root}/${path}"
+	source_file="${source_dir}/${path}"
+	current_comparison=$(mktemp "${temporary}/current-comparison.XXXXXX")
+	source_comparison=$(mktemp "${temporary}/source-comparison.XXXXXX")
+	if [[ -f "$current_file" && -f "$source_file" ]]; then
+		normalize_for_comparison "$path" "$current_file" "$current_comparison"
+		normalize_for_comparison "$path" "$source_file" "$source_comparison"
+	fi
+	if [[ -f "$current_file" && -f "$source_file" ]] && cmp -s "$current_comparison" "$source_comparison"; then
+		already_applied_paths+=("$path")
+		echo "Skipped already-applied template file: ${path}."
+	fi
+done < <(git -C "$source_dir" diff --name-only -z "$from_commit" "$to_commit" -- "${template_pathspecs[@]}")
+
+patch_pathspecs=("${template_pathspecs[@]}")
+for path in "${already_applied_paths[@]}"; do
+	patch_pathspecs+=(":(exclude)${path}")
+done
+
+git -C "$source_dir" diff --binary --find-renames "$from_commit" "$to_commit" -- "${patch_pathspecs[@]}" > "$patch_file"
 if [[ -s "$patch_file" ]]; then
-  if [[ "$source_module_path" != "$target_module_path" ]]; then
-    normalized_patch_file="${temporary}/template-normalized.patch"
-    awk -v source_module="$source_module_path" -v target_module="$target_module_path" '
+	while IFS= read -r -d '' path; do
+		if git -C "$source_dir" cat-file -e "${from_commit}:${path}" 2>/dev/null; then
+			git -C "$source_dir" show "${from_commit}:${path}" \
+				| git -C "$repo_root" hash-object -w --stdin >/dev/null
+		fi
+	done < <(git -C "$source_dir" diff --name-only -z "$from_commit" "$to_commit" -- "${patch_pathspecs[@]}")
+
+	direct_patch_file="$patch_file"
+	merge_patch_file="$patch_file"
+	if [[ "$source_module_path" != "$target_module_path" ]]; then
+		direct_patch_file="${temporary}/template-direct.patch"
+		merge_patch_file="${temporary}/template-merge.patch"
+		awk -v source_module="$source_module_path" -v target_module="$target_module_path" '
       function replace_literal(value, source, target, position) {
         while ((position = index(value, source)) > 0) {
           value = substr(value, 1, position - 1) target substr(value, position + length(source))
@@ -197,12 +253,75 @@ if [[ -s "$patch_file" ]]; then
         }
         print
       }
-    ' "$patch_file" > "$normalized_patch_file"
-    patch_file="$normalized_patch_file"
-    echo "Normalized template module paths in Go sources and go.mod to ${target_module_path}."
-  fi
-  (cd "$repo_root" && git apply --3way --index "$patch_file")
-  (cd "$repo_root" && git reset --quiet)
+    ' "$patch_file" > "$direct_patch_file"
+		awk -v source_module="$source_module_path" -v target_module="$target_module_path" '
+      function replace_literal(value, source, target, position) {
+        while ((position = index(value, source)) > 0) {
+          value = substr(value, 1, position - 1) target substr(value, position + length(source))
+        }
+        return value
+      }
+
+      /^diff --git / {
+        current_path = $0
+        sub(/^diff --git a\/[^ ]+ b\//, "", current_path)
+      }
+
+      {
+        if ((current_path == "go.mod" || current_path ~ /\.go$/) && $0 ~ /^\+/ && $0 !~ /^\+\+\+ /) {
+          line_prefix = substr($0, 1, 1)
+          line_body = substr($0, 2)
+          $0 = line_prefix replace_literal(line_body, source_module, target_module)
+        }
+        print
+      }
+    ' "$patch_file" > "$merge_patch_file"
+		echo "Normalized template module paths in Go sources and go.mod to ${target_module_path}."
+	fi
+
+	apply_log="${temporary}/apply.log"
+	check_log="${temporary}/check.log"
+	set +e
+	(cd "$repo_root" && git apply --check "$direct_patch_file") >"$check_log" 2>&1
+	check_status=$?
+	set -e
+	if [[ "$check_status" -eq 0 ]]; then
+		set +e
+		(cd "$repo_root" && git apply "$direct_patch_file") >"$apply_log" 2>&1
+		apply_status=$?
+		set -e
+		applied_with_index=false
+	else
+		printf '%s\n' "Direct template patch did not apply; trying three-way merge." >"$apply_log"
+		set +e
+		(cd "$repo_root" && git apply --3way --index "$merge_patch_file") >>"$apply_log" 2>&1
+		apply_status=$?
+		set -e
+		applied_with_index=true
+	fi
+	cat "$apply_log"
+	failed_paths=$(sed -n \
+		-e 's/^error: patch failed: \([^:]*\):.*$/\1/p' \
+		-e 's/^error: \([^:]*\): patch does not apply$/\1/p' \
+		"$apply_log" | sort -u)
+	conflict_paths=$(git -C "$repo_root" diff --name-only --diff-filter=U)
+	if [[ "$apply_status" -ne 0 || -n "$failed_paths" || -n "$conflict_paths" ]]; then
+		reported_paths=$(printf '%s\n%s\n' "$failed_paths" "$conflict_paths" | sed '/^$/d' | sort -u)
+		if [[ -n "$reported_paths" ]]; then
+			echo "Template update has unresolved or unapplied changes in:" >&2
+			printf '%s\n' "$reported_paths" >&2
+			echo "Resolve these files manually, stage them, and rerun template provenance validation." >&2
+		else
+			echo "Template update could not be applied cleanly. Review the working tree before retrying." >&2
+		fi
+		if [[ "$apply_status" -eq 0 ]]; then
+			exit 1
+		fi
+		exit "$apply_status"
+	fi
+	if [[ "$applied_with_index" == true ]]; then
+		(cd "$repo_root" && git reset --quiet)
+	fi
 fi
 
 go_cache=${GOCACHE:-}

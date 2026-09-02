@@ -140,7 +140,7 @@ Validate the template manifest and required files with:
 
 `.template/manifest.json` records the source repository, template version, template commit, generated origin, compatibility, dependencies, and update policy. The update automation detects new template versions, opens PRs in derived repositories, enforces compatibility, and leaves breaking-change records and application-specific conflicts for manual review.
 
-The generated repository also includes a scheduled and manually dispatchable template-update workflow. It looks for `vMAJOR.MINOR.PATCH` tags, applies a three-way patch from the recorded `template_commit`, normalizes the canonical Go module path to the generated repository's module path, checks Go and PostgreSQL compatibility, records new provenance, and opens a pull request. It never merges automatically. The repository owner must allow GitHub Actions to create pull requests and review generated changes manually.
+The generated repository also includes a scheduled and manually dispatchable template-update workflow. It looks for `vMAJOR.MINOR.PATCH` tags, applies a normalized patch when possible and otherwise uses a three-way merge from the recorded `template_commit`, checks Go and PostgreSQL compatibility, detects pre-applied files, reports unresolved paths, records new provenance only after a complete update, and opens a pull request. It never merges automatically. The repository owner must allow GitHub Actions to create pull requests and review generated changes manually.
 
 If an older generated project recorded its own repository commit instead of the template commit, the workflow resolves provenance from the matching release tag and opens a small repair pull request automatically.
 
@@ -166,7 +166,7 @@ The template maintainer must publish version tags such as `v0.1.0` before derive
 
 ## Planned phases
 
-The current foundation release is `0.2.9`, which includes the `0.2.5` hardening work, lifecycle module-normalization and legacy bridge fixes, and provenance detection for immutable release tags. The immutable `v0.2.6`, `v0.2.7`, and `v0.2.8` tags were created before the final lifecycle workflow correction; new generated repositories should use `v0.2.9`. The next planned releases are:
+The current foundation release is `0.2.10`, which includes the `0.2.5` hardening work, lifecycle module-normalization and legacy bridge fixes, provenance detection for immutable release tags, and safer handling of pre-applied files and merge failures. The immutable `v0.2.6`, `v0.2.7`, and `v0.2.8` tags were created before the final lifecycle workflow correction; new generated repositories should use the latest release tag. The next planned releases are:
 
 - `0.3.0`: administrated login, Argon2id, Ed25519/EdDSA JWTs, approximately 15-minute access tokens, 30-day rotating/revocable refresh tokens, HttpOnly cookies, environment-specific Secure and SameSite policies, CSRF protection, authentication/authorization middleware, and authorized access to `/api/v1/internal/errors?endpoint=<path>`.
 - `0.4.0`: Dependabot, dependency review, `govulncheck`, Docker image scanning, strict `go.sum` checks, full-SHA Actions pinning, release notes, and safer updater conflict reporting.

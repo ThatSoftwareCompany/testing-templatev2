@@ -1,0 +1,16 @@
+openapi: 3.1.0
+info:
+  title: TSC Go API Template
+  version: 0.1.0
+  description: Operational API foundation for a TSC modular Go monolith.
+servers:
+  - url: /
+paths:
+  /__ping:
+    $ref: './modules/health.yaml#/paths/~1__ping'
+  /api/v1/health:
+    $ref: './modules/health.yaml#/paths/~1api~1v1~1health'
+components:
+  schemas:
+    ErrorResponse:
+      $ref: './modules/errors.yaml#/components/schemas/ErrorResponse'

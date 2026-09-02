@@ -1,0 +1,63 @@
+openapi: 3.1.0
+info:
+  title: Errors module
+  version: 0.1.0
+paths:
+  /api/v1/internal/errors:
+    get:
+      x-status: planned-not-registered
+      summary: List persisted HTTP 5xx events
+      description: This route must remain unregistered until authentication and internal authorization are implemented.
+      parameters:
+        - name: endpoint
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Persisted safe error events.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorListResponse'
+        '401':
+          description: Authentication required.
+        '403':
+          description: Internal permission required.
+components:
+  schemas:
+    ErrorResponse:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message, correlation_id]
+          properties:
+            code:
+              type: string
+            message:
+              type: string
+            correlation_id:
+              type: string
+    ErrorEvent:
+      type: object
+      required: [occurred_at, correlation_id, method, path, endpoint, status_code, error_code, message]
+      properties:
+        occurred_at: {type: string, format: date-time}
+        correlation_id: {type: string}
+        method: {type: string}
+        path: {type: string}
+        endpoint: {type: string}
+        status_code: {type: integer, minimum: 500, maximum: 599}
+        error_code: {type: string}
+        message: {type: string}
+    ErrorListResponse:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/ErrorEvent'

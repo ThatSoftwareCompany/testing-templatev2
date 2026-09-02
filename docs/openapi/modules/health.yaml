@@ -1,0 +1,50 @@
+openapi: 3.1.0
+info:
+  title: Health module
+  version: 0.1.0
+paths:
+  /__ping:
+    get:
+      operationId: ping
+      summary: Check process liveness
+      responses:
+        '200':
+          description: The process is alive.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status]
+                properties:
+                  status:
+                    type: string
+                    const: ok
+  /api/v1/health:
+    get:
+      operationId: health
+      summary: Check service readiness
+      responses:
+        '200':
+          description: The service is ready or deliberately running without a database.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+        '503':
+          description: PostgreSQL is enabled but unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+components:
+  schemas:
+    HealthResponse:
+      type: object
+      required: [status, database]
+      properties:
+        status:
+          type: string
+          enum: [ok, not_ready]
+        database:
+          type: string
+          enum: [disabled, up, down]

@@ -1,0 +1,163 @@
+name: Template update
+
+on:
+  schedule:
+    - cron: "17 3 * * 1"
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  update:
+    if: github.repository != 'ThatSoftwareCompany/template-go-api'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    env:
+      TEMPLATE_REPOSITORY: https://github.com/ThatSoftwareCompany/template-go-api.git
+
+    steps:
+      - name: Check out derived repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          # TEMPLATE-MANAGED: configure the secret in the derived repository;
+          # do not replace this with a hard-coded credential.
+          token: ${{ secrets.TEMPLATE_UPDATE_TOKEN || github.token }}
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: 1.26.0
+          cache: true
+
+      - name: Detect latest compatible template version
+        id: template
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          current_version=$(jq -er '.template_version' .template/manifest.json)
+          recorded_commit=$(jq -er '.template_commit' .template/manifest.json)
+          resolve_tag_commit() {
+            local version=$1
+            local commit
+            commit=$(git ls-remote "$TEMPLATE_REPOSITORY" "refs/tags/v${version}^{}" | awk 'NR == 1 { print $1 }')
+            if [[ -z "$commit" ]]; then
+              commit=$(git ls-remote "$TEMPLATE_REPOSITORY" "refs/tags/v${version}" | awk 'NR == 1 { print $1 }')
+            fi
+            printf '%s' "$commit"
+          }
+
+          source_probe=$(mktemp -d)
+          trap 'rm -rf -- "$source_probe"' EXIT
+          git init --bare --quiet "$source_probe"
+          current_commit=""
+          if [[ "$recorded_commit" =~ ^[0-9a-f]{40}$ ]] \
+            && git -C "$source_probe" fetch --quiet --no-tags "$TEMPLATE_REPOSITORY" "$recorded_commit" \
+            && git -C "$source_probe" cat-file -e "${recorded_commit}^{commit}"; then
+            current_commit="$recorded_commit"
+            echo "Using recorded template commit ${current_commit}."
+          fi
+          if [[ -z "$current_commit" ]]; then
+            current_commit=$(resolve_tag_commit "$current_version")
+          fi
+          if [[ -z "$current_commit" ]]; then
+            echo "Unable to resolve the source commit for template version ${current_version}" >&2
+            exit 1
+          fi
+          latest_tag=$(git ls-remote --tags --refs "$TEMPLATE_REPOSITORY" 'refs/tags/v*' \
+            | awk -F/ '{print $3}' \
+            | sort -V \
+            | tail -n 1)
+          if [[ -z "$latest_tag" ]]; then
+            echo "No version tags were found in $TEMPLATE_REPOSITORY" >&2
+            exit 1
+          fi
+
+          latest_commit=$(git ls-remote "$TEMPLATE_REPOSITORY" "refs/tags/${latest_tag}^{}" | awk '{print $1}')
+          if [[ -z "$latest_commit" ]]; then
+            latest_commit=$(git ls-remote "$TEMPLATE_REPOSITORY" "refs/tags/${latest_tag}" | awk '{print $1}')
+          fi
+          if [[ -z "$latest_commit" ]]; then
+            echo "Unable to resolve commit for ${latest_tag}" >&2
+            exit 1
+          fi
+
+          latest_version=${latest_tag#v}
+          echo "latest_tag=${latest_tag}" >> "$GITHUB_OUTPUT"
+          echo "latest_version=${latest_version}" >> "$GITHUB_OUTPUT"
+          echo "latest_commit=${latest_commit}" >> "$GITHUB_OUTPUT"
+          echo "current_commit=${current_commit}" >> "$GITHUB_OUTPUT"
+
+          if [[ "$current_commit" == "$latest_commit" ]]; then
+            echo "update_required=false" >> "$GITHUB_OUTPUT"
+            if [[ "$recorded_commit" != "$current_commit" ]]; then
+              echo "provenance_repair=true" >> "$GITHUB_OUTPUT"
+              echo "Derived repository content is current, but template provenance needs repair."
+            else
+              echo "provenance_repair=false" >> "$GITHUB_OUTPUT"
+              echo "Derived repository is already based on ${latest_tag}."
+            fi
+          else
+            echo "update_required=true" >> "$GITHUB_OUTPUT"
+            echo "provenance_repair=false" >> "$GITHUB_OUTPUT"
+            echo "Template update available: ${latest_tag} (${latest_commit})."
+          fi
+
+      - name: Apply template update
+        if: steps.template.outputs.update_required == 'true' || steps.template.outputs.provenance_repair == 'true'
+        id: update
+        shell: bash
+        env:
+          CURRENT_COMMIT: ${{ steps.template.outputs.current_commit }}
+          LATEST_COMMIT: ${{ steps.template.outputs.latest_commit }}
+          LATEST_VERSION: ${{ steps.template.outputs.latest_version }}
+          PROVENANCE_REPAIR: ${{ steps.template.outputs.provenance_repair }}
+        run: |
+          set -euo pipefail
+
+          branch="chore/template-update-${LATEST_VERSION}"
+          git switch -c "$branch"
+          if [[ "$PROVENANCE_REPAIR" == "true" && "$CURRENT_COMMIT" == "$LATEST_COMMIT" ]]; then
+            GOCACHE=/tmp/template-update-cache go run ./cmd/template \
+              -command record-provenance \
+              -template-version "$LATEST_VERSION" \
+              -template-commit "$CURRENT_COMMIT"
+          else
+            ./scripts/template-update.sh \
+              --template-repository "$TEMPLATE_REPOSITORY" \
+              --from-commit "$CURRENT_COMMIT" \
+              --to-commit "$LATEST_COMMIT"
+          fi
+
+          git diff --check
+          git diff --cached --name-only -z | xargs -0 -r git add --
+          git diff --name-only -z | xargs -0 -r git add --
+          git ls-files --others --exclude-standard -z | xargs -0 -r git add --
+          git diff --cached --quiet && {
+            echo "Template update produced no changes."
+            exit 0
+          }
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "chore: update template to ${LATEST_VERSION}"
+          git push --set-upstream origin "$branch"
+          echo "branch=${branch}" >> "$GITHUB_OUTPUT"
+
+      - name: Open update pull request
+        if: (steps.template.outputs.update_required == 'true' || steps.template.outputs.provenance_repair == 'true') && steps.update.outputs.branch != ''
+        env:
+          GH_TOKEN: ${{ secrets.TEMPLATE_UPDATE_TOKEN || github.token }}
+          BRANCH: ${{ steps.update.outputs.branch }}
+          LATEST_VERSION: ${{ steps.template.outputs.latest_version }}
+          LATEST_COMMIT: ${{ steps.template.outputs.latest_commit }}
+        run: |
+          set -euo pipefail
+          gh pr create \
+            --base main \
+            --head "$BRANCH" \
+            --title "chore: update template to ${LATEST_VERSION}" \
+            --body "Automated template update to version ${LATEST_VERSION} (${LATEST_COMMIT}). Review compatibility, migrations, and application-specific conflicts before merging."

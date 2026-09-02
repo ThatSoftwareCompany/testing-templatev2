@@ -1,0 +1,47 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:?POSTGRES_USER must be set}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}
+      POSTGRES_DB: ${POSTGRES_DB:?POSTGRES_DB must be set}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  api:
+    build:
+      context: .
+      target: development
+    command: ["go", "run", "./cmd/api"]
+    environment:
+      APP_NAME: ${APP_NAME:-template-go-api}
+      APP_ENV: ${APP_ENV:-development}
+      HTTP_ADDR: :8080
+      DATABASE_ENABLED: "true"
+      DATABASE_URL: postgres://${POSTGRES_USER:?POSTGRES_USER must be set}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}@postgres:5432/${POSTGRES_DB:?POSTGRES_DB must be set}?sslmode=disable
+      DATABASE_MAX_CONNS: ${DATABASE_MAX_CONNS:-10}
+      DATABASE_MIN_CONNS: ${DATABASE_MIN_CONNS:-1}
+      DATABASE_HEALTH_TIMEOUT: ${DATABASE_HEALTH_TIMEOUT:-3s}
+      MIGRATIONS_DIR: file://migrations
+      MIGRATIONS_RUN_ON_STARTUP: "true"
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:3000}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    ports:
+      - "8080:8080"
+    volumes:
+      - .:/app
+      - go_build_cache:/root/.cache/go-build
+      - go_module_cache:/go/pkg/mod
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  postgres_data:
+  go_build_cache:
+  go_module_cache:

@@ -1,0 +1,39 @@
+{
+  "template_id": "template-go-api",
+  "template_source": "ThatSoftwareCompany/template-go-api",
+  "template_version": "0.2.9",
+  "template_commit": "",
+  "generated_from": "",
+  "repository": "ThatSoftwareCompany/template-go-api",
+  "license": "Apache-2.0",
+  "minimum_go_version": "1.26.0",
+  "database": "PostgreSQL",
+  "migration_tool": "golang-migrate",
+  "architecture": "modular-mvc",
+  "supported_environments": ["development", "test", "production"],
+  "dependency_versions": {
+    "github.com/golang-migrate/migrate/v4": "v4.19.1",
+    "github.com/jackc/pgx/v5": "v5.8.0"
+  },
+  "compatibility": {
+    "go": "1.26.0",
+    "postgresql": "16+"
+  },
+  "update_policy": {
+    "manifest_validation": "implemented",
+    "provenance_recording": "implemented",
+    "version_detection": "implemented",
+    "derived_repository_prs": "implemented",
+    "compatibility_checks": "implemented",
+    "breaking_change_log": "manual",
+    "conflict_resolution": "manual"
+  },
+  "generated_project": {
+    "project_name": "{{PROJECT_NAME}}",
+    "module_path": "{{MODULE_PATH}}",
+    "app_name": "{{APP_NAME}}",
+    "environment": "{{APP_ENV}}",
+    "database_enabled": "{{DATABASE_ENABLED}}",
+    "architecture": "{{ARCHITECTURE}}"
+  }
+}

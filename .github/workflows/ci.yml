@@ -1,0 +1,157 @@
+name: Go API CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: 1.26.7
+          cache: true
+
+      - name: Tidy modules
+        run: go mod tidy
+
+      - name: Verify module files are committed
+        run: git diff --exit-code -- go.mod go.sum
+
+      - name: Verify module checksums
+        run: go mod verify
+
+      - name: Validate template lifecycle
+        run: ./scripts/validate-template.sh
+
+      - name: Validate shell scripts
+        run: bash -n scripts/*.sh
+
+      - name: Test template lifecycle
+        run: ./scripts/test-template-lifecycle.sh
+
+      - name: Check formatting
+        run: test -z "$(gofmt -l .)"
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test
+        run: go test ./...
+
+      - name: Race test
+        run: go test -race ./...
+
+      - name: Build API
+        run: go build -o "$RUNNER_TEMP/template-api" ./cmd/api
+
+      - name: Build migration CLI
+        run: go build -o "$RUNNER_TEMP/template-migrate" ./cmd/migrate
+
+      - name: Build template CLI
+        run: go build -o "$RUNNER_TEMP/template" ./cmd/template
+
+  integration:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: test_user
+          POSTGRES_PASSWORD: test_password
+          POSTGRES_DB: test_db
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U test_user -d test_db"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: 1.26.7
+          cache: true
+
+      - name: Run integration tests
+        env:
+          TEST_DATABASE_URL: postgres://test_user:test_password@localhost:5432/test_db?sslmode=disable
+        run: go test -tags=integration ./...
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Build production image
+        run: docker build --target production -t tsc-template-go-api:production .
+
+      - name: Build development image
+        run: docker build --target development -t tsc-template-go-api:development .
+
+      - name: Verify production image is non-root
+        run: test "$(docker image inspect tsc-template-go-api:production --format '{{.Config.User}}')" = "app"
+
+      - name: Start Compose stack
+        env:
+          POSTGRES_USER: test_user
+          POSTGRES_PASSWORD: test_password
+          POSTGRES_DB: test_db
+        run: |
+          set -euo pipefail
+          docker compose up --build -d
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:8080/__ping >/dev/null && \
+              curl --fail --silent http://127.0.0.1:8080/api/v1/health >/dev/null; then
+              exit 0
+            fi
+            sleep 2
+          done
+          docker compose ps
+          docker compose logs
+          exit 1
+
+      - name: Stop Compose stack
+        if: always()
+        env:
+          POSTGRES_USER: test_user
+          POSTGRES_PASSWORD: test_password
+          POSTGRES_DB: test_db
+        run: docker compose down -v
+
+      - name: Smoke test production image without PostgreSQL
+        run: |
+          set -euo pipefail
+          docker run -d --name tsc-template-go-api-production -p 18080:8080 \
+            -e APP_ENV=test \
+            -e DATABASE_ENABLED=false \
+            tsc-template-go-api:production
+          trap 'docker rm -f tsc-template-go-api-production >/dev/null 2>&1 || true' EXIT
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:18080/__ping >/dev/null && \
+              curl --fail --silent http://127.0.0.1:18080/api/v1/health >/dev/null; then
+              exit 0
+            fi
+            sleep 1
+          done
+          docker logs tsc-template-go-api-production
+          exit 1

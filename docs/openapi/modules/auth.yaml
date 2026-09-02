@@ -1,0 +1,16 @@
+openapi: 3.1.0
+info:
+  title: Authentication module
+  version: 0.1.0
+paths: {}
+x-status: planned
+x-authentication-design:
+  access_token_ttl: approximately 15 minutes
+  refresh_token_ttl: 30 days initially, configurable within 7-30 days
+  password_hashing: Argon2id
+  jwt_algorithm: Ed25519/EdDSA
+  refresh_tokens: rotating and revocable
+  cookies: HttpOnly; Secure=false in development and Secure=true in production
+  same_site: documented per environment
+  csrf: required for mutable cookie-authenticated operations
+  key_management: generated and configured securely outside source control

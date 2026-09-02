@@ -47,6 +47,21 @@ func RequirePermission(service *Service, permission string, next http.Handler) h
 	}))
 }
 
+// RequireRole enforces an explicit role after authenticating the request.
+// Roles do not grant access implicitly; product routes should normally pair
+// this check with RequirePermission when both dimensions are part of the
+// authorization contract.
+func RequireRole(service *Service, role string, next http.Handler) http.Handler {
+	return RequireAuthentication(service, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		principal, ok := PrincipalFromContext(r.Context())
+		if !ok || !hasRole(principal.Roles, role) {
+			httpserver.WriteError(w, r, http.StatusForbidden, "forbidden", "permission denied")
+			return
+		}
+		next.ServeHTTP(w, r)
+	}))
+}
+
 func PrincipalFromContext(ctx context.Context) (Principal, bool) {
 	principal, ok := ctx.Value(principalContextKey{}).(Principal)
 	return principal, ok
@@ -55,6 +70,15 @@ func PrincipalFromContext(ctx context.Context) (Principal, bool) {
 func hasPermission(permissions []string, wanted string) bool {
 	for _, permission := range permissions {
 		if permission == wanted {
+			return true
+		}
+	}
+	return false
+}
+
+func hasRole(roles []string, wanted string) bool {
+	for _, role := range roles {
+		if role == wanted {
 			return true
 		}
 	}

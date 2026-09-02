@@ -5,8 +5,9 @@ import (
 	"log/slog"
 	"net/http"
 
+	"github.com/ThatSoftwareCompany/testing-templatev2/internal/modules/auth"
+	"github.com/ThatSoftwareCompany/testing-templatev2/internal/modules/example"
 	"github.com/ThatSoftwareCompany/testing-templatev2/internal/platform/errstore"
-	"github.com/ThatSoftwareCompany/testing-templatev2/internal/platform/httpserver"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -16,6 +17,7 @@ type Dependencies struct {
 	Database   *pgxpool.Pool
 	ErrorStore errstore.Store
 	Logger     *slog.Logger
+	Auth       *auth.Service
 }
 
 // RegisterRoutes is the application-owned route composition point.
@@ -24,10 +26,9 @@ type Dependencies struct {
 // template-provided operational routes in cmd/api and internal/modules/health.
 // The template updater preserves this file so application routes remain owned
 // by the generated repository.
-func RegisterRoutes(mux *http.ServeMux, _ Dependencies) {
-	// This route exists only to validate application-owned route preservation
-	// across template updates. Product routes should live in their own module.
-	mux.HandleFunc("GET /api/v1/example", func(w http.ResponseWriter, _ *http.Request) {
-		httpserver.WriteJSON(w, http.StatusOK, map[string]string{"status": "example route works"})
-	})
+func RegisterRoutes(mux *http.ServeMux, dependencies Dependencies) {
+	// This route simulates a product endpoint. It is intentionally registered
+	// only from the application-owned extension point and requires both an
+	// application role and permission.
+	example.RegisterRoutes(mux, dependencies.Auth)
 }

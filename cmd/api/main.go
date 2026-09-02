@@ -121,6 +121,7 @@ func run(cfg config.Config, logger *slog.Logger) error {
 		Database:   pool,
 		ErrorStore: store,
 		Logger:     logger,
+		Auth:       authService,
 	})
 
 	serverErrors := make(chan error, 1)

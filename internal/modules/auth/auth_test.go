@@ -385,6 +385,59 @@ func TestProtectedErrorsRequireExplicitPermission(t *testing.T) {
 	}
 }
 
+func TestAuthorizationMiddlewareRequiresAuthenticationRoleAndPermission(t *testing.T) {
+	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("generate key: %v", err)
+	}
+	service := NewService(&memoryRepository{}, &TokenManager{
+		privateKey: privateKey,
+		publicKey:  publicKey,
+		keyID:      "key",
+		issuer:     "issuer",
+		audience:   "audience",
+	}, strings.Repeat("c", 32), time.Minute, 30*24*time.Hour, false, http.SameSiteLaxMode)
+	endpoint := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})
+	handler := RequireRole(service, "example_reader", RequirePermission(service, "example:read", endpoint))
+
+	tests := []struct {
+		name        string
+		roles       []string
+		permissions []string
+		wantStatus  int
+	}{
+		{name: "missing authentication", wantStatus: http.StatusUnauthorized},
+		{name: "wrong role", roles: []string{"other_role"}, permissions: []string{"example:read"}, wantStatus: http.StatusForbidden},
+		{name: "missing permission", roles: []string{"example_reader"}, wantStatus: http.StatusForbidden},
+		{name: "authorized", roles: []string{"example_reader"}, permissions: []string{"example:read"}, wantStatus: http.StatusNoContent},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			request := httptest.NewRequest(http.MethodGet, "/api/v1/example", nil)
+			if test.name != "missing authentication" {
+				raw, issueErr := service.tokens.IssueAccessToken(User{
+					ID:          1,
+					Email:       "user@example.com",
+					Roles:       test.roles,
+					Permissions: test.permissions,
+				}, time.Now().UTC(), time.Minute)
+				if issueErr != nil {
+					t.Fatalf("issue access token: %v", issueErr)
+				}
+				request.AddCookie(&http.Cookie{Name: accessCookieName, Value: raw})
+			}
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, request)
+			if response.Code != test.wantStatus {
+				t.Fatalf("status = %d, want %d; body=%s", response.Code, test.wantStatus, response.Body.String())
+			}
+		})
+	}
+}
+
 type memoryRepository struct {
 	user     storedUser
 	failures int

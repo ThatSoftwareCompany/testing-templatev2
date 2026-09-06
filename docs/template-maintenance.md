@@ -14,6 +14,9 @@ The manifest is the source of truth for the template identity, version, source r
 - `.github/workflows/template-update.yml` detects version tags and opens derived-repository PRs with least-privilege write permissions.
 - The workflow accepts an optional `TEMPLATE_UPDATE_TOKEN` secret for updates that modify `.github/workflows` files.
 - Compatibility changes are rejected automatically; file deletions remain a manual migration.
+- `.template/ownership.json` declares template-managed and application-owned paths. Existing application-owned paths are preserved; missing extension-point files are bootstrapped once from the template.
+- `--dry-run --report-file PATH` reports changed paths, compatibility, release notes, and breaking status without modifying the derived repository.
+- Release notes are machine-checked for `breaking: true|false`. Breaking updates are opened with a `[BREAKING]` title and fail the dedicated review gate until the migration is handled manually.
 
 ## Update workflow
 
@@ -29,6 +32,20 @@ The derived-repository workflow performs these steps:
 8. Create an update pull request in the derived repository.
 9. Leave application-specific conflicts for manual resolution; it must never merge generated pull requests automatically.
 
+For a local preview, use:
+
+```bash
+./scripts/template-update.sh \
+  --project-root "$PWD" \
+  --template-repository https://github.com/ThatSoftwareCompany/template-go-api.git \
+  --from-commit <current-template-commit> \
+  --to-commit <target-template-commit> \
+  --dry-run \
+  --report-file /tmp/template-update-report.md
+```
+
+The updater requires a clean working tree. A conflict report is informational and provenance is not advanced until the complete update is applied and validated. Resolve only the reported files, preserve application-owned routes, run the generated repository test suite, and record provenance after review.
+
 If a generated repository contains its own Git commit in `template_commit`, the workflow resolves the source commit from the matching release tag and opens a provenance-repair pull request.
 
 Repositories generated from versions before `v0.2.4` require a sequential bridge update before consuming `v0.2.5` or newer. The pre-`v0.2.4` updater could not normalize Go module paths in newly added files. If a direct update reports `no required module provides package github.com/ThatSoftwareCompany/template-go-api/internal/...`, close that update PR, apply `v0.2.4` manually with the current updater, merge it, and then run the automatic update again. The lifecycle suite exercises this bridge as `v0.2.3 -> v0.2.4 -> v0.2.5`; the recommended current target is the latest release because the immutable `v0.2.6`, `v0.2.7`, and `v0.2.8` tags predate the final lifecycle workflow correction.
@@ -41,9 +58,17 @@ The workflow requires GitHub Actions to be allowed to create pull requests in th
 
 Template-managed files contain reusable runtime, security, CI, Docker, migration, and lifecycle behavior. Generated repositories should not modify them to add product functionality. This includes `cmd/api`, `internal/platform`, `internal/modules/health`, `internal/modules/errors`, `.github/workflows`, `scripts`, `.template`, and the root Docker, migration, and CI files.
 
-Product-specific code belongs in new business modules under `internal/modules/<business-module>/`. Register those modules in `internal/app/routes.go`, which is an application-owned extension point intentionally preserved by `scripts/template-update.sh` once it exists. Repositories generated before this extension point was introduced receive the file during their first compatible update; subsequent updates preserve its contents. The template-provided `/__ping` and `/api/v1/health` routes are operational routes and remain active automatically; they do not need to be copied or re-registered by the generated project.
+Product-specific code belongs in new business modules under `internal/modules/<business-module>/`. Register those modules in `internal/app/routes.go`, which is an application-owned extension point intentionally preserved by `scripts/template-update.sh` once it exists. The `Dependencies.Auth` field exposes template-managed authentication to this composition point; protected handlers should use explicit `auth.RequireRole` and `auth.RequirePermission` middleware. Repositories generated before this dependency was added must add the field and pass the canonical auth service when applying this compatibility change. Subsequent updates preserve application route registrations. The template-provided `/__ping` and `/api/v1/health` routes are operational routes and remain active automatically; they do not need to be copied or re-registered by the generated project.
+
+Application-owned authorization must be tested at the HTTP boundary with three cases: no session (`401`), a valid session without the required role or permission (`403`), and a valid session with both (`2xx`). A role is not an implicit permission grant. Product-only routes and modules must remain outside the canonical template and must not be added to the aggregate OpenAPI document.
 
 The exception is maintenance of the canonical template itself. Template maintainers may change managed files when implementing a deliberate template, security, test, documentation, or lifecycle change, with the corresponding version, validation, and review updates.
+
+## Supply-chain maintenance
+
+Keep `.github/dependabot.yml` enabled for `gomod` and `github-actions`. Do not merge a major dependency update without reviewing compatibility and release notes. Dependency Review blocks high and critical findings; `govulncheck` blocks reachable Go vulnerabilities; Docker Scout evaluates the local production image and blocks fixable high and critical vulnerabilities. The CI scan requires `DOCKER_SCOUT_HUB_USER` and `DOCKER_SCOUT_HUB_PASSWORD`, containing a read-only Docker Hub PAT. Configure both names as Actions secrets and as Dependabot secrets because Dependabot-triggered workflows cannot read Actions secrets; never put either value in the repository or `.env`. The CI action-pin validator requires every external Action to use a full commit SHA and a release comment. Workflow YAML is checked with `actionlint v1.7.12`.
+
+Security exceptions are a last-resort, temporary allowlist, not a permanent bypass. Add only exact scanner ID/component pairs to `.github/security-exceptions.json`, with a responsible owner, a tracking issue, a reason, and an expiry date. The file is validated on every run; expired entries and wildcards fail the build.
 
 ## Authentication release migration
 
@@ -58,6 +83,8 @@ Complete this checklist after generating a repository from the template and befo
 - [ ] Create a dedicated fine-grained personal access token or GitHub App installation token scoped to the derived repository.
 - [ ] Grant Contents: Read and write, Workflows: Read and write, and Pull requests: Read and write.
 - [ ] Add the token as the repository Actions secret `TEMPLATE_UPDATE_TOKEN` under `Settings -> Secrets and variables -> Actions`.
+- [ ] Add `DOCKER_SCOUT_HUB_USER` and `DOCKER_SCOUT_HUB_PASSWORD` as Actions secrets using a dedicated read-only Docker Hub PAT for the production image scan.
+- [ ] Add `DOCKER_SCOUT_HUB_USER` and `DOCKER_SCOUT_HUB_PASSWORD` as Dependabot secrets with the same names for Dependabot pull requests.
 - [ ] In `Settings -> Actions -> General`, enable read and write workflow permissions.
 - [ ] Enable GitHub Actions pull request creation if the organization policy exposes that option.
 - [ ] Run the workflow manually and verify that it creates an update branch and pull request.

@@ -17,7 +17,9 @@ CMD ["go", "run", "./cmd/api"]
 
 FROM alpine:3.22 AS production
 
-RUN addgroup -S app && adduser -S -G app app
+RUN apk upgrade --no-cache \
+	&& addgroup -S app \
+	&& adduser -S -G app app
 WORKDIR /app
 COPY --from=build /out/api /app/api
 COPY --from=build /out/auth /app/auth

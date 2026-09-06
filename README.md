@@ -85,6 +85,7 @@ routes -> controller -> service -> repository/client
 - `internal/modules/auth` owns administrator provisioning, password hashing, session tokens, CSRF, and authorization middleware.
 - `internal/modules/errors` owns safe error listing behind authentication and `errors:read` authorization.
 - `internal/app/routes.go` is the application-owned extension point for registering product modules.
+- `app.Dependencies.Auth` exposes the template authentication service so product routes can compose `auth.RequireRole` and `auth.RequirePermission` without duplicating token or cookie handling.
 - `internal/platform` owns configuration, HTTP, logging, PostgreSQL, migrations, and safe error storage.
 - `repository` is reserved for persistence.
 - `client` is reserved for external APIs.
@@ -92,6 +93,16 @@ routes -> controller -> service -> repository/client
 - OpenAPI files live in `docs/openapi/` and are separate from controllers.
 
 The template owns the operational composition in `cmd/api`, including `/__ping` and `/api/v1/health`. A generated project must not add product routes to those files or to `internal/modules/health`. Add product modules under `internal/modules/<business-module>/` and register them from `internal/app/routes.go`; the template updater preserves that extension point.
+
+Product endpoints that require authorization should wrap their handlers with the template middleware and explicit permissions. Roles are an additional boundary, not an implicit permission grant:
+
+```go
+next := http.HandlerFunc(controller.HandleList)
+handler := auth.RequirePermission(dependencies.Auth, "orders:read", next)
+handler = auth.RequireRole(dependencies.Auth, "support_agent", handler)
+```
+
+Unauthenticated requests receive `401`; authenticated requests without the required role or permission receive `403`. Keep the authorization decision in the module composition and leave the template-managed auth module unchanged.
 
 ## Security
 
@@ -183,13 +194,24 @@ The template maintainer must publish version tags such as `v0.1.0` before derive
 
 ## Release roadmap
 
-The current release is `0.3.0`, which adds cookie-based authentication, authorization, CSRF protection, rotating refresh tokens, the protected internal error endpoint, and the administrator provisioning CLI. The immutable `v0.2.6`, `v0.2.7`, and `v0.2.8` tags remain historical; new generated repositories should use the latest release tag. The next planned releases are:
+The current release line is `0.4.0`. `v0.3.1` reconciles the protected application-route extension point that was merged after the original `v0.3.0` tag. `v0.4.0` adds supply-chain security and safer lifecycle automation. The immutable `v0.2.6`, `v0.2.7`, and `v0.2.8` tags remain historical; new generated repositories should use the latest release tag. The planned releases are:
 
-- `0.4.0`: Dependabot, dependency review, `govulncheck`, Docker image scanning, strict `go.sum` checks, full-SHA Actions pinning, release notes, and safer updater conflict reporting.
+- `0.3.1`: release metadata reconciliation for the post-`v0.3.0` protected application-route extension point.
+- `0.4.0`: Dependabot, dependency review, `govulncheck`, Docker image scanning, strict `go.sum` checks, full-SHA Actions pinning, release notes, security exceptions, ownership metadata, and safer updater conflict reporting.
 - `0.5.0`: provider-agnostic same-origin deployment contract and trusted reverse-proxy configuration.
 - `1.0.0`: final validation from a clean `testing-templatev2` repository.
 
 Public registration, password recovery, Google OAuth, frontend implementation, and cloud-provider-specific deployment are not part of the current backend template.
+
+### Supply-chain controls
+
+Dependabot groups weekly minor and patch updates for Go modules and GitHub Actions. Major updates remain separate for manual review. Dependency Review blocks high and critical dependency findings in pull requests. CI runs the pinned `govulncheck` version and Docker Scout against the locally built production image; fixable high and critical image findings block the workflow. Docker Scout requires `DOCKER_SCOUT_HUB_USER` and `DOCKER_SCOUT_HUB_PASSWORD`, containing a read-only Docker Hub identity and PAT. Store those names both as Actions secrets for normal pull requests and as Dependabot secrets for Dependabot-triggered workflows; GitHub does not expose Actions secrets to Dependabot workflows.
+
+All Actions are pinned to immutable commit SHAs. Keep the version comment when updating a pin so Dependabot can identify the intended release. `scripts/validate-action-pins.sh` rejects tags, branches, malformed SHAs, and pins without a human-readable version comment.
+
+Workflow YAML is validated with `actionlint v1.7.12` by `scripts/validate-workflows.sh`. The validator runs in CI and from `scripts/validate-template.sh`; keep shell heredocs and YAML block scalars correctly indented, or prefer `printf` when generating small reports inside workflow steps.
+
+`.github/security-exceptions.json` is empty by default. A temporary exception must identify one scanner finding and component exactly, include a reason, owner, GitHub issue, and future `expires_on` date. Expired, incomplete, wildcard, or unmatched exceptions fail validation. Exceptions never allow an unpinned Action.
 
 After review and merge, the backend and frontend repositories must be marked as GitHub Template Repositories from `Settings -> General -> Template repository`. This is a post-merge checklist item, not an automated repository mutation.
 

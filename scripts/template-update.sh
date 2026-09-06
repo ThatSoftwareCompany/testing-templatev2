@@ -8,6 +8,8 @@ repo_root=""
 template_repository=""
 from_commit=""
 to_commit=""
+dry_run=false
+report_file=""
 
 usage() {
   cat <<'EOF'
@@ -19,6 +21,8 @@ Options:
   --from-commit SHA           Previous template commit recorded by the project (required)
   --to-commit SHA             Target template commit to apply (required)
   --project-root PATH         Derived repository root (defaults to the script's repository)
+  --dry-run                   Report the update without modifying the derived repository
+  --report-file PATH          Write the update report to PATH
   -h, --help                  Show this help
 EOF
 }
@@ -43,6 +47,15 @@ while [[ $# -gt 0 ]]; do
     --project-root)
       [[ $# -ge 2 ]] || { echo "--project-root requires a value" >&2; exit 2; }
       repo_root=$2
+      shift 2
+      ;;
+    --dry-run)
+      dry_run=true
+      shift
+      ;;
+    --report-file)
+      [[ $# -ge 2 ]] || { echo "--report-file requires a value" >&2; exit 2; }
+      report_file=$2
       shift 2
       ;;
     -h|--help)
@@ -99,11 +112,56 @@ if [[ -n "$(git -C "$repo_root" status --porcelain)" ]]; then
   exit 1
 fi
 
+validate_ownership_file() {
+  local ownership_file=$1
+  jq -e '
+    .schema_version == 1 and
+    ((.template_managed_paths | type) == "array") and
+    ((.application_owned_paths | type) == "array") and
+    all(.template_managed_paths[]; type == "string" and length > 0) and
+    all(.application_owned_paths[];
+      type == "string" and length > 0 and
+      (startswith("/") | not) and
+      (contains("..") | not) and
+      (contains("*") | not)
+    )
+  ' "$ownership_file" >/dev/null || {
+    echo "template ownership file is invalid: ${ownership_file}" >&2
+    exit 1
+  }
+}
+
+application_owned_paths=()
+add_application_owned_path() {
+  local path=$1
+  [[ -n "$path" ]] || return 0
+  [[ "$path" != /* && "$path" != ../* && "$path" != */../* && "$path" != *'*'* ]] || {
+    echo "application-owned paths must be safe relative paths: ${path}" >&2
+    exit 1
+  }
+  local existing
+  for existing in "${application_owned_paths[@]}"; do
+    [[ "$existing" != "$path" ]] || return 0
+  done
+  application_owned_paths+=("$path")
+}
+
+load_application_owned_paths() {
+  local ownership_file=$1
+  [[ -f "$ownership_file" ]] || return 0
+  validate_ownership_file "$ownership_file"
+  while IFS= read -r path; do
+    add_application_owned_path "$path"
+  done < <(jq -r '.application_owned_paths[]' "$ownership_file")
+}
+
 current_manifest="${repo_root}/.template/manifest.json"
 if [[ ! -f "$current_manifest" ]]; then
   echo "derived template manifest is missing: .template/manifest.json" >&2
   exit 1
 fi
+load_application_owned_paths "${repo_root}/.template/ownership.json"
+add_application_owned_path "internal/app/routes.go"
 
 current_commit=$(jq -er '.template_commit' "$current_manifest")
 current_version=$(jq -er '.template_version' "$current_manifest")
@@ -116,22 +174,19 @@ if [[ "$current_commit" != "$from_commit" && "$current_release_commit" == "$from
   echo "Using source commit ${from_commit} resolved from template version ${current_version}."
 fi
 
-# internal/app/routes.go is an application-owned extension point. Preserve
-# derived repository route registrations when the file already exists. Older
-# generated repositories must receive the file once during their migration.
-template_pathspecs=(
-  .
-  ':(exclude).template/manifest.json'
-)
-if [[ -f "${repo_root}/internal/app/routes.go" ]]; then
-  template_pathspecs+=(':(exclude)internal/app/routes.go')
-fi
-
 temporary=$(mktemp -d /tmp/tsc-template-update.XXXXXX)
 trap 'rm -rf -- "$temporary"' EXIT
 source_dir="${temporary}/template"
 target_manifest="${temporary}/target-manifest.json"
 patch_file="${temporary}/template.patch"
+
+if [[ -z "$report_file" ]]; then
+  report_file="${temporary}/template-update-report.md"
+elif [[ "$report_file" != /* ]]; then
+  report_file="${repo_root}/${report_file}"
+fi
+report_directory=$(dirname -- "$report_file")
+mkdir -p "$report_directory"
 
 git clone --quiet --no-checkout "$template_repository" "$source_dir"
 git -C "$source_dir" fetch --quiet --no-tags origin "$from_commit" "$to_commit"
@@ -142,6 +197,20 @@ if ! git -C "$source_dir" merge-base --is-ancestor "$from_commit" "$to_commit"; 
   exit 1
 fi
 git -C "$source_dir" checkout --quiet --detach "$to_commit"
+
+load_application_owned_paths "${source_dir}/.template/ownership.json"
+
+# The generated repository owns these paths. All other paths are eligible for
+# template updates, while an ownership file can add more application paths.
+template_pathspecs=(
+  .
+  ':(exclude).template/manifest.json'
+)
+for path in "${application_owned_paths[@]}"; do
+  if [[ -e "${repo_root}/${path}" ]]; then
+    template_pathspecs+=(":(exclude)${path}")
+  fi
+done
 
 target_module_path=$(awk '$1 == "module" { print $2; exit }' "${repo_root}/go.mod")
 source_module_path=$(git -C "$source_dir" show "${to_commit}:go.mod" | awk '$1 == "module" { print $2; exit }')
@@ -167,8 +236,65 @@ if [[ -x "${source_dir}/scripts/validate-template.sh" ]]; then
   (cd "$source_dir" && GOCACHE="$source_cache" ./scripts/validate-template.sh)
 fi
 
+breaking_change=false
+release_notes=()
+breaking_releases=()
+while IFS= read -r -d '' release_path; do
+  release_notes+=("$release_path")
+  release_file="${source_dir}/${release_path}"
+  marker=$(sed -n 's/^breaking:[[:space:]]*\(true\|false\)[[:space:]]*$/\1/p' "$release_file" | head -n 1)
+  if [[ -z "$marker" ]]; then
+    echo "release notes must declare breaking: true|false: ${release_path}" >&2
+    exit 1
+  fi
+  if [[ "$marker" == true ]]; then
+    breaking_change=true
+    breaking_releases+=("$release_path")
+  fi
+done < <(git -C "$source_dir" diff --name-only -z "$from_commit" "$to_commit" -- 'docs/releases/*.md')
+
+write_report() {
+  local status=${1:-ready}
+  local paths=${2:-}
+  {
+    echo "# Template update report"
+    echo
+    echo "- status: ${status}"
+    echo "- from_commit: ${from_commit}"
+    echo "- to_commit: ${to_commit}"
+    echo "- template_version: ${template_version}"
+    echo "- breaking: ${breaking_change}"
+    echo "- dry_run: ${dry_run}"
+    echo
+    echo "## Release notes"
+    if [[ -n "${release_notes[*]:-}" ]]; then
+      printf '%s\n' "${release_notes[@]}"
+      for release_path in "${release_notes[@]}"; do
+        echo
+        echo "### ${release_path}"
+        sed -n '1,160p' "${source_dir}/${release_path}"
+      done
+    else
+      echo "No release notes changed."
+    fi
+    if [[ -n "${breaking_releases[*]:-}" ]]; then
+      echo
+      echo "Breaking release notes:"
+      printf '%s\n' "${breaking_releases[@]}"
+    fi
+    echo
+    echo "## Changed template paths"
+    if [[ -n "$paths" ]]; then
+      printf '%s\n' "$paths"
+    else
+      echo "No applicable template paths."
+    fi
+  } > "$report_file"
+}
+
 deleted_files=$(git -C "$source_dir" diff --diff-filter=D --name-only "$from_commit" "$to_commit" -- "${template_pathspecs[@]}")
 if [[ -n "$deleted_files" ]]; then
+  write_report "rejected-deletion" "$deleted_files"
   echo "template updates that delete files require manual migration:" >&2
   printf '%s\n' "$deleted_files" >&2
   exit 1
@@ -221,6 +347,13 @@ for path in "${already_applied_paths[@]}"; do
 done
 
 git -C "$source_dir" diff --binary --find-renames "$from_commit" "$to_commit" -- "${patch_pathspecs[@]}" > "$patch_file"
+changed_paths=$(git -C "$source_dir" diff --name-only "$from_commit" "$to_commit" -- "${patch_pathspecs[@]}" | sort)
+if [[ "$dry_run" == true ]]; then
+  write_report "dry-run" "$changed_paths"
+  echo "Template update dry-run completed from ${from_commit} to ${to_commit} (version ${template_version})."
+  echo "Report: ${report_file}"
+  exit 0
+fi
 if [[ -s "$patch_file" ]]; then
 	while IFS= read -r -d '' path; do
 		if git -C "$source_dir" cat-file -e "${from_commit}:${path}" 2>/dev/null; then
@@ -307,6 +440,7 @@ if [[ -s "$patch_file" ]]; then
 	conflict_paths=$(git -C "$repo_root" diff --name-only --diff-filter=U)
 	if [[ "$apply_status" -ne 0 || -n "$failed_paths" || -n "$conflict_paths" ]]; then
 		reported_paths=$(printf '%s\n%s\n' "$failed_paths" "$conflict_paths" | sed '/^$/d' | sort -u)
+		write_report "conflict" "$reported_paths"
 		if [[ -n "$reported_paths" ]]; then
 			echo "Template update has unresolved or unapplied changes in:" >&2
 			printf '%s\n' "$reported_paths" >&2
@@ -334,5 +468,8 @@ fi
   -template-commit "$to_commit")
 (cd "$repo_root" && GOCACHE="$go_cache" go run ./cmd/template -command validate)
 
+write_report "applied" "$changed_paths"
+
 echo "Template update applied from ${from_commit} to ${to_commit} (version ${template_version})."
-echo "Review the diff, run the derived repository test suite, and resolve any application-specific changes manually."
+echo "Review the diff, run the derived repository test suite, and resolve any application-specific conflicts manually."
+echo "Report: ${report_file}"

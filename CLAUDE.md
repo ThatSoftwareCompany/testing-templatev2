@@ -5,3 +5,7 @@ Use `AGENTS.md` as the canonical instructions for this repository. This is the G
 In generated repositories, do not modify template-managed infrastructure to add product features. Use `internal/app/routes.go` for route composition and add business modules under `internal/modules/<business-module>/`. Modifying template-managed files is valid only when intentionally maintaining the canonical template or resolving an update conflict while preserving both sides.
 
 Authentication is template-managed. Preserve the auth module, migrations, cookie names and paths, Argon2id parameters, JWT Ed25519 validation, CSRF checks, refresh-token rotation, and deny-by-default permission middleware in generated repositories. Product code must not return tokens in JSON or store session credentials in browser storage.
+
+Register protected product routes from `internal/app/routes.go` using `dependencies.Auth`, `auth.RequireRole`, and `auth.RequirePermission`; do not duplicate authentication logic in business modules.
+
+Preserve supply-chain controls: Dependabot, dependency review, `govulncheck`, Docker Scout, security-exception metadata, ownership metadata, and immutable SHA-pinned Actions. Never bypass a failing security gate or resolve a semantic template conflict by overwriting application code.

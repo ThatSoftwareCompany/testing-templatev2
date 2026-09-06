@@ -12,8 +12,17 @@
   "architecture": "modular-mvc",
   "supported_environments": ["development", "test", "production"],
   "dependency_versions": {
+    "actions/checkout": "v4.2.2",
+    "actions/dependency-review-action": "v4.8.2",
+    "actions/setup-go": "v5.5.0",
+    "docker/scout-action": "v1.24.0",
+    "github.com/golang-jwt/jwt/v5": "v5.3.1",
     "github.com/golang-migrate/migrate/v4": "v4.19.1",
-    "github.com/jackc/pgx/v5": "v5.8.0"
+    "github.com/jackc/pgx/v5": "v5.10.0",
+    "github.com/rhysd/actionlint": "v1.7.12",
+    "golang.org/x/crypto": "v0.56.0",
+    "golang.org/x/term": "v0.45.0",
+    "golang.org/x/vuln/cmd/govulncheck": "v1.7.0"
   },
   "compatibility": {
     "go": "1.26.0",
@@ -25,8 +34,15 @@
     "version_detection": "implemented",
     "derived_repository_prs": "implemented",
     "compatibility_checks": "implemented",
-    "breaking_change_log": "manual",
-    "conflict_resolution": "manual"
+    "breaking_change_log": "implemented",
+    "conflict_resolution": "manual",
+    "dry_run": "implemented",
+    "path_ownership": "implemented",
+    "security_exceptions": "implemented",
+    "action_pinning": "implemented",
+    "dependency_review": "implemented",
+    "govulncheck": "implemented",
+    "docker_scanning": "implemented"
   },
   "generated_project": {
     "project_name": "testing-templatev2",

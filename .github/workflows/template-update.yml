@@ -146,6 +146,13 @@ jobs:
               '- breaking: false' \
               > "$REPORT_FILE"
           else
+            ./scripts/template-update-bootstrap.sh \
+              --template-repository "$TEMPLATE_REPOSITORY" \
+              --to-commit "$LATEST_COMMIT"
+            if ! git diff --quiet -- .template/manifest.json; then
+              git add .template/manifest.json
+              git commit -m "chore: bootstrap template metadata for ${LATEST_VERSION}"
+            fi
             ./scripts/template-update.sh \
               --template-repository "$TEMPLATE_REPOSITORY" \
               --from-commit "$CURRENT_COMMIT" \

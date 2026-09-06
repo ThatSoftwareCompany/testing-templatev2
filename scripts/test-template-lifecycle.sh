@@ -8,7 +8,7 @@ temporary=$(mktemp -d /tmp/tsc-template-lifecycle.XXXXXX)
 trap 'rm -rf -- "$temporary"' EXIT
 source_repository="$repo_root"
 
-for command in git go grep jq perl sed tar; do
+for command in git go grep jq perl sed sha256sum tar; do
 	if ! command -v "$command" >/dev/null 2>&1; then
 		echo "required command is missing: ${command}" >&2
 		exit 1
@@ -41,8 +41,7 @@ resolve_manifest_revision() {
 }
 
 v031=$(git -C "$source_repository" rev-parse --verify v0.3.1^{commit} 2>/dev/null || resolve_manifest_revision "0.3.1")
-v040=$(git -C "$source_repository" rev-parse v0.4.0^{commit})
-v041=$(git -C "$source_repository" rev-parse HEAD^{commit})
+v042=$(git -C "$source_repository" rev-parse HEAD^{commit})
 source_module_path=$(awk '$1 == "module" { print $2; exit }' "$source_repository/go.mod")
 if [[ -z "$source_module_path" ]]; then
 	echo "unable to resolve the source Go module path" >&2
@@ -351,22 +350,86 @@ run_deletion_update_test() {
 	expect_update_rejection "$source_directory" "${temporary}/deleting-target" "delete files require manual migration"
 }
 
-run_v041_clean_room_update_test() {
-	local directory="${temporary}/v041-derived"
-	local report_file="${temporary}/v041-dry-run.md"
+run_manifest_bootstrap_test() {
+	local directory="${temporary}/manifest-bootstrap-derived"
+	local failed_directory="${temporary}/manifest-bootstrap-failure"
 	extract_revision "$v031" "$directory"
 	initialize_repository "$directory"
 
 	(
 		cd "$directory"
-		GOCACHE="${temporary}/v041-cache" go run ./cmd/template \
+		GOCACHE="${temporary}/bootstrap-cache" go run ./cmd/template \
 			-command record-provenance \
 			-template-version "0.3.1" \
 			-template-commit "$v031"
 	)
-	go -C "$directory" mod edit -module github.com/example/v040-derived
+	temporary_manifest=$(mktemp)
+	jq '
+		.generated_from = "ThatSoftwareCompany/example-bootstrap" |
+		.generated_project.module_path = "github.com/example/bootstrap-derived" |
+		.dependency_versions["github.com/jackc/pgx/v5"] = "v5.8.0"
+	' "$directory/.template/manifest.json" > "$temporary_manifest"
+	mv "$temporary_manifest" "$directory/.template/manifest.json"
+	git -C "$directory" add .template/manifest.json
+	git -C "$directory" commit -qm "test: customize legacy manifest metadata"
+
+	before_hash=$(sha256sum "$directory/.template/manifest.json")
+	"$repo_root/scripts/template-update-bootstrap.sh" \
+		--project-root "$directory" \
+		--template-repository "$source_repository" \
+		--to-commit "$v042" \
+		--dry-run
+	after_hash=$(sha256sum "$directory/.template/manifest.json")
+	[[ "$before_hash" == "$after_hash" ]] || { echo "bootstrap dry-run modified the manifest" >&2; exit 1; }
+	git -C "$directory" diff --quiet
+
+	"$repo_root/scripts/template-update-bootstrap.sh" \
+		--project-root "$directory" \
+		--template-repository "$source_repository" \
+		--to-commit "$v042"
+	jq -e '
+		.template_version == "0.3.1" and
+		.template_commit == "'"$v031"'" and
+		.generated_from == "ThatSoftwareCompany/example-bootstrap" and
+		.generated_project.module_path == "github.com/example/bootstrap-derived" and
+		.dependency_versions["github.com/jackc/pgx/v5"] == "v5.10.0"
+	' "$directory/.template/manifest.json" >/dev/null
+	[[ "$(git -C "$directory" diff --name-only)" == ".template/manifest.json" ]] || {
+		echo "bootstrap changed paths outside the manifest" >&2
+		exit 1
+	}
+
+	extract_revision "$v031" "$failed_directory"
+	initialize_repository "$failed_directory"
+	set +e
+	(
+		cd "$failed_directory"
+		"$repo_root/scripts/template-update-bootstrap.sh" \
+			--template-repository "$source_repository" \
+			--to-commit "0000000000000000000000000000000000000000"
+	) >"${failed_directory}.log" 2>&1
+	local status=$?
+	set -e
+	[[ "$status" -ne 0 ]] || { echo "invalid bootstrap commit was unexpectedly accepted" >&2; exit 1; }
+	git -C "$failed_directory" diff --quiet
+}
+
+run_v042_clean_room_update_test() {
+	local directory="${temporary}/v042-derived"
+	local report_file="${temporary}/v042-dry-run.md"
+	extract_revision "$v031" "$directory"
+	initialize_repository "$directory"
+
+	(
+		cd "$directory"
+		GOCACHE="${temporary}/v042-cache" go run ./cmd/template \
+			-command record-provenance \
+			-template-version "0.3.1" \
+			-template-commit "$v031"
+	)
+	go -C "$directory" mod edit -module github.com/example/v042-derived
 	find "$directory" -type f -name '*.go' -print0 | while IFS= read -r -d '' file; do
-		sed -i "s|${escaped_source_module_path}|github.com/example/v040-derived|g" "$file"
+		sed -i "s|${escaped_source_module_path}|github.com/example/v042-derived|g" "$file"
 	done
 	temporary_manifest=$(mktemp)
 	jq '.dependency_versions["github.com/jackc/pgx/v5"] = "v5.8.0"' \
@@ -382,7 +445,7 @@ run_v041_clean_room_update_test() {
 		--project-root "$directory" \
 		--template-repository "$source_repository" \
 		--from-commit "$v031" \
-		--to-commit "$v041" \
+		--to-commit "$v042" \
 		--dry-run \
 		--report-file "$report_file"
 	after=$(git -C "$directory" status --porcelain)
@@ -394,15 +457,15 @@ run_v041_clean_room_update_test() {
 		--project-root "$directory" \
 		--template-repository "$source_repository" \
 		--from-commit "$v031" \
-		--to-commit "$v041"
+		--to-commit "$v042"
 
-	jq -e '.template_version == "0.4.1" and .template_commit == "'"$v041"'"' \
+	jq -e '.template_version == "0.4.2" and .template_commit == "'"$v042"'"' \
 		"$directory/.template/manifest.json" >/dev/null
 	jq -e '.dependency_versions["github.com/jackc/pgx/v5"] == "v5.10.0"' \
 		"$directory/.template/manifest.json" >/dev/null
 	test -f "$directory/.template/ownership.json"
-	grep -Fq 'github.com/example/v040-derived/internal/platform/errstore' "$directory/internal/app/routes.go"
-	GOCACHE="${temporary}/v041-derived-cache" go -C "$directory" test ./...
+	grep -Fq 'github.com/example/v042-derived/internal/platform/errstore' "$directory/internal/app/routes.go"
+	GOCACHE="${temporary}/v042-derived-cache" go -C "$directory" test ./...
 }
 
 run_breaking_release_note_test() {
@@ -419,21 +482,21 @@ run_breaking_release_note_test() {
 	git -C "$source_directory" commit -qm "test: mark release as breaking"
 	source_commit=$(git -C "$source_directory" rev-parse HEAD)
 
-	extract_revision "$v041" "$target_directory"
+	extract_revision "$v042" "$target_directory"
 	initialize_repository "$target_directory"
 	(
 		cd "$target_directory"
 		GOCACHE="${temporary}/breaking-cache" go run ./cmd/template \
 			-command record-provenance \
-			-template-version "0.4.1" \
-			-template-commit "$v041"
+			-template-version "0.4.2" \
+			-template-commit "$v042"
 	)
 	git -C "$target_directory" add .template/manifest.json
 	git -C "$target_directory" commit -qm "test: record current template provenance"
 	"$repo_root/scripts/template-update.sh" \
 		--project-root "$target_directory" \
 		--template-repository "$source_directory" \
-		--from-commit "$v041" \
+		--from-commit "$v042" \
 		--to-commit "$source_commit" \
 		--dry-run \
 		--report-file "$report_file"
@@ -608,7 +671,8 @@ run_conflicting_file_test
 run_legacy_bootstrap_test
 run_incompatible_update_test
 run_deletion_update_test
-run_v041_clean_room_update_test
+run_manifest_bootstrap_test
+run_v042_clean_room_update_test
 run_breaking_release_note_test
 run_action_pin_validation_test
 run_workflow_validation_test

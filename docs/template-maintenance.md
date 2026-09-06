@@ -10,6 +10,7 @@ The manifest is the source of truth for the template identity, version, source r
 - `scripts/validate-template.sh` verifies required template files and blocks a real `.env` file.
 - CI runs the lifecycle validation and writes build outputs outside the repository root.
 - `scripts/template-update.sh` applies a normalized direct patch when possible and falls back to a three-way patch between recorded and target template commits.
+- `scripts/template-update-bootstrap.sh` synchronizes template-managed manifest metadata before an update and preserves provenance and generated-project fields.
 - The updater imports source base blobs before a three-way patch, recognizes safely pre-applied files, and reports unapplied paths instead of accepting a partial update.
 - `.github/workflows/template-update.yml` detects version tags and opens derived-repository PRs with least-privilege write permissions.
 - The workflow accepts an optional `TEMPLATE_UPDATE_TOKEN` secret for updates that modify `.github/workflows` files.
@@ -51,6 +52,8 @@ If a generated repository contains its own Git commit in `template_commit`, the 
 Repositories generated from versions before `v0.2.4` require a sequential bridge update before consuming `v0.2.5` or newer. The pre-`v0.2.4` updater could not normalize Go module paths in newly added files. If a direct update reports `no required module provides package github.com/ThatSoftwareCompany/template-go-api/internal/...`, close that update PR, apply `v0.2.4` manually with the current updater, merge it, and then run the automatic update again. The lifecycle suite exercises this bridge as `v0.2.3 -> v0.2.4 -> v0.2.5`; the recommended current target is the latest release because the immutable `v0.2.6`, `v0.2.7`, and `v0.2.8` tags predate the final lifecycle workflow correction.
 
 Repositories that already applied the lifecycle code but still use the pre-`v0.2.9` workflow detector require a one-time bootstrap. Create a small reviewed PR that updates `.github/workflows/template-update.yml` to the current template version while preserving the repository's `TEMPLATE_UPDATE_TOKEN` configuration. Merge that bootstrap PR, then run the automatic updater again. Do not resolve a full historical update by copying template-managed files over application changes.
+
+Repositories generated before `v0.4.2` may not have the metadata bootstrap step in their workflow. Their first update to `v0.4.2` requires a reviewed manifest bootstrap commit; preserve `template_version`, `template_commit`, `generated_from`, `generated_project`, and application-owned routes. Repositories generated from `v0.4.2` run the bootstrap automatically before the normal updater and then create the regular update PR.
 
 The workflow requires GitHub Actions to be allowed to create pull requests in the derived repository. It is skipped when running in the canonical template repository itself.
 

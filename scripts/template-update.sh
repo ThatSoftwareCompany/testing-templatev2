@@ -225,11 +225,11 @@ source_go_compatibility=$(jq -er '.compatibility.go' "$target_manifest")
 source_postgresql_compatibility=$(jq -er '.compatibility.postgresql' "$target_manifest")
 current_go_compatibility=$(jq -er '.compatibility.go' "$current_manifest")
 current_postgresql_compatibility=$(jq -er '.compatibility.postgresql' "$current_manifest")
-source_dependency_versions=$(jq -cS -er '.dependency_versions' "$target_manifest")
-current_dependency_versions=$(jq -cS -er '.dependency_versions' "$current_manifest")
-manifest_dependency_update_required=false
-if [[ "$source_dependency_versions" != "$current_dependency_versions" ]]; then
-  manifest_dependency_update_required=true
+source_manifest_metadata=$(jq -cS -er '{template_id, template_source, repository, license, minimum_go_version, database, migration_tool, architecture, supported_environments, dependency_versions, compatibility, update_policy}' "$target_manifest")
+current_manifest_metadata=$(jq -cS -er '{template_id, template_source, repository, license, minimum_go_version, database, migration_tool, architecture, supported_environments, dependency_versions, compatibility, update_policy}' "$current_manifest")
+manifest_metadata_update_required=false
+if [[ "$source_manifest_metadata" != "$current_manifest_metadata" ]]; then
+  manifest_metadata_update_required=true
 fi
 
 if [[ "$source_go_compatibility" != "$current_go_compatibility" || "$source_postgresql_compatibility" != "$current_postgresql_compatibility" ]]; then
@@ -354,7 +354,7 @@ done
 
 git -C "$source_dir" diff --binary --find-renames "$from_commit" "$to_commit" -- "${patch_pathspecs[@]}" > "$patch_file"
 changed_paths=$(git -C "$source_dir" diff --name-only "$from_commit" "$to_commit" -- "${patch_pathspecs[@]}" | sort)
-if [[ "$manifest_dependency_update_required" == true ]]; then
+if [[ "$manifest_metadata_update_required" == true ]]; then
   changed_paths=$(printf '%s\n%s\n' "$changed_paths" '.template/manifest.json' | sed '/^$/d' | sort -u)
 fi
 if [[ "$dry_run" == true ]]; then
@@ -467,13 +467,24 @@ if [[ -s "$patch_file" ]]; then
 	fi
 fi
 
-if [[ "$manifest_dependency_update_required" == true ]]; then
+if [[ "$manifest_metadata_update_required" == true ]]; then
   synced_manifest=$(mktemp "${temporary}/synced-manifest.XXXXXX")
   jq --slurpfile source_manifest "$target_manifest" \
-    '.dependency_versions = $source_manifest[0].dependency_versions' \
+    '.template_id = $source_manifest[0].template_id |
+     .template_source = $source_manifest[0].template_source |
+     .repository = $source_manifest[0].repository |
+     .license = $source_manifest[0].license |
+     .minimum_go_version = $source_manifest[0].minimum_go_version |
+     .database = $source_manifest[0].database |
+     .migration_tool = $source_manifest[0].migration_tool |
+     .architecture = $source_manifest[0].architecture |
+     .supported_environments = $source_manifest[0].supported_environments |
+     .dependency_versions = $source_manifest[0].dependency_versions |
+     .compatibility = $source_manifest[0].compatibility |
+     .update_policy = $source_manifest[0].update_policy' \
     "$current_manifest" > "$synced_manifest"
   mv "$synced_manifest" "$current_manifest"
-  echo "Synchronized dependency versions in .template/manifest.json."
+  echo "Synchronized template manifest metadata."
 fi
 
 go_cache=${GOCACHE:-}

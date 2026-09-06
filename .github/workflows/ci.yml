@@ -14,12 +14,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           fetch-depth: 0
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
         with:
           go-version: 1.26.7
           cache: true
@@ -39,6 +39,15 @@ jobs:
       - name: Validate shell scripts
         run: bash -n scripts/*.sh
 
+      - name: Validate workflow syntax
+        run: ./scripts/validate-workflows.sh
+
+      - name: Validate GitHub Action pins
+        run: ./scripts/validate-action-pins.sh
+
+      - name: Validate security exceptions
+        run: ./scripts/validate-security-exceptions.sh
+
       - name: Test template lifecycle
         run: ./scripts/test-template-lifecycle.sh
 
@@ -47,6 +56,11 @@ jobs:
 
       - name: Vet
         run: go vet ./...
+
+      - name: Check known Go vulnerabilities
+        env:
+          GOVULNCHECK_VERSION: v1.7.0
+        run: go run "golang.org/x/vuln/cmd/govulncheck@${GOVULNCHECK_VERSION}" ./...
 
       - name: Test
         run: go test ./...
@@ -84,12 +98,12 @@ jobs:
           --health-retries 10
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           fetch-depth: 0
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
         with:
           go-version: 1.26.7
           cache: true
@@ -103,7 +117,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       - name: Build production image
         run: docker build --target production -t tsc-template-go-api:production .
@@ -113,6 +127,33 @@ jobs:
 
       - name: Verify production image is non-root
         run: test "$(docker image inspect tsc-template-go-api:production --format '{{.Config.User}}')" = "app"
+
+      - name: Verify Docker Scout credentials
+        env:
+          DOCKER_SCOUT_HUB_USER: ${{ secrets.DOCKER_SCOUT_HUB_USER }}
+          DOCKER_SCOUT_HUB_PASSWORD: ${{ secrets.DOCKER_SCOUT_HUB_PASSWORD }}
+        run: |
+          set -euo pipefail
+          test -n "$DOCKER_SCOUT_HUB_USER" || {
+            echo "DOCKER_SCOUT_HUB_USER is required for the Docker Scout gate." >&2
+            exit 1
+          }
+          test -n "$DOCKER_SCOUT_HUB_PASSWORD" || {
+            echo "DOCKER_SCOUT_HUB_PASSWORD is required for the Docker Scout gate." >&2
+            exit 1
+          }
+
+      - name: Scan production image with Docker Scout
+        uses: docker/scout-action@7c6b6c3f7844478ace1ffd4e7aef649053d1f87d # v1.24.0
+        with:
+          command: cves
+          image: local://tsc-template-go-api:production
+          only-severities: high,critical
+          only-fixed: true
+          exit-code: true
+          write-comment: false
+          dockerhub-user: ${{ secrets.DOCKER_SCOUT_HUB_USER }}
+          dockerhub-password: ${{ secrets.DOCKER_SCOUT_HUB_PASSWORD }}
 
       - name: Start Compose stack
         env:
@@ -125,11 +166,12 @@ jobs:
           mkdir -p "$auth_dir"
           openssl genpkey -algorithm Ed25519 -out "$auth_dir/private.pem" >/dev/null 2>&1
           openssl pkey -in "$auth_dir/private.pem" -pubout -out "$auth_dir/public.pem" >/dev/null 2>&1
-          export AUTH_PRIVATE_KEY_FILE="$auth_dir/private.pem"
-          export AUTH_PUBLIC_KEY_FILE="$auth_dir/public.pem"
-          export AUTH_CSRF_SECRET="$(openssl rand -hex 32)"
+          AUTH_PRIVATE_KEY_FILE="$auth_dir/private.pem"
+          AUTH_PUBLIC_KEY_FILE="$auth_dir/public.pem"
+          AUTH_CSRF_SECRET=$(openssl rand -hex 32)
+          export AUTH_PRIVATE_KEY_FILE AUTH_PUBLIC_KEY_FILE AUTH_CSRF_SECRET
           docker compose up --build -d
-          for attempt in $(seq 1 30); do
+          for _ in $(seq 1 30); do
             if curl --fail --silent http://127.0.0.1:8080/__ping >/dev/null && \
               curl --fail --silent http://127.0.0.1:8080/api/v1/health >/dev/null; then
               csrf_status=$(curl --silent --show-error --output "$RUNNER_TEMP/auth-csrf.json" \
@@ -172,7 +214,7 @@ jobs:
             -e DATABASE_ENABLED=false \
             tsc-template-go-api:production
           trap 'docker rm -f tsc-template-go-api-production >/dev/null 2>&1 || true' EXIT
-          for attempt in $(seq 1 30); do
+          for _ in $(seq 1 30); do
             if curl --fail --silent http://127.0.0.1:18080/__ping >/dev/null && \
               curl --fail --silent http://127.0.0.1:18080/api/v1/health >/dev/null; then
               exit 0
@@ -180,4 +222,15 @@ jobs:
             sleep 1
           done
           docker logs tsc-template-go-api-production
+          exit 1
+
+  template-update-breaking-gate:
+    if: github.event_name == 'pull_request' && startsWith(github.head_ref, 'chore/template-update-') && startsWith(github.event.pull_request.title, '[BREAKING]')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Block breaking template update
+        run: |
+          echo "Breaking template updates require explicit manual migration and review."
           exit 1

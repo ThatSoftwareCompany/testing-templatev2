@@ -10,7 +10,11 @@ required_files=(
   "AGENTS.md"
   ".env.example"
   ".template/manifest.json"
+  ".template/ownership.json"
+  ".github/dependabot.yml"
+  ".github/security-exceptions.json"
   ".github/workflows/template-update.yml"
+  ".github/workflows/dependency-review.yml"
   "internal/app/routes.go"
   "cmd/auth/main.go"
   "internal/modules/auth/controller.go"
@@ -27,6 +31,11 @@ required_files=(
   "migrations/000002_create_authentication.down.sql"
   "scripts/generate-dev-auth-keys.sh"
   "scripts/template-update.sh"
+  "scripts/validate-manifest-dependencies.sh"
+  "scripts/validate-workflows.sh"
+  "scripts/validate-action-pins.sh"
+  "scripts/validate-security-exceptions.sh"
+  "scripts/check-security-exceptions.sh"
 )
 
 for relative_file in "${required_files[@]}"; do
@@ -46,6 +55,22 @@ if [[ -e "${repo_root}/.env" ]]; then
   exit 1
 fi
 
+jq -e '
+  .schema_version == 1 and
+  ((.template_managed_paths | type) == "array") and
+  ((.application_owned_paths | type) == "array") and
+  all(.template_managed_paths[]; type == "string" and length > 0) and
+  all(.application_owned_paths[];
+    type == "string" and length > 0 and
+    (startswith("/") | not) and
+    (contains("..") | not) and
+    (contains("*") | not)
+  )
+' "${repo_root}/.template/ownership.json" >/dev/null || {
+  echo "template ownership metadata is invalid" >&2
+  exit 1
+}
+
 template_version=$(sed -n 's/^[[:space:]]*"template_version":[[:space:]]*"\([^"]*\)".*/\1/p' "${repo_root}/.template/manifest.json")
 if [[ -z "$template_version" || ! -f "${repo_root}/docs/releases/v${template_version}.md" ]]; then
   echo "release notes are missing for template version ${template_version:-unknown}" >&2
@@ -54,9 +79,20 @@ fi
 
 bash -n "${repo_root}"/scripts/*.sh
 
+(cd "$repo_root" && ./scripts/validate-action-pins.sh)
+(cd "$repo_root" && ./scripts/validate-security-exceptions.sh)
+(cd "$repo_root" && ./scripts/validate-workflows.sh)
+(cd "$repo_root" && ./scripts/validate-manifest-dependencies.sh)
+
+temporary_go_cache=""
 go_cache=${GOCACHE:-}
 if [[ -z "$go_cache" || ! -d "$go_cache" || ! -w "$go_cache" ]]; then
-  go_cache=$(mktemp -d /tmp/tsc-template-go-cache.XXXXXX)
+  temporary_go_cache=$(mktemp -d /tmp/tsc-template-go-cache.XXXXXX)
+  go_cache="$temporary_go_cache"
+  cleanup() {
+    rm -rf -- "$temporary_go_cache"
+  }
+  trap cleanup EXIT
 fi
 
 (cd "$repo_root" && GOCACHE="$go_cache" go run ./cmd/template -command validate)

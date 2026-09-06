@@ -27,6 +27,22 @@ v024=$(git -C "$source_repository" rev-parse v0.2.4^{commit})
 v025=$(git -C "$source_repository" rev-parse v0.2.5^{commit})
 v027=$(git -C "$source_repository" rev-parse v0.2.7^{commit})
 v029=$(git -C "$source_repository" rev-parse v0.2.9^{commit})
+resolve_manifest_revision() {
+	local version=$1
+	local commit
+	while IFS= read -r commit; do
+		if git -C "$source_repository" show "${commit}:.template/manifest.json" 2>/dev/null \
+			| jq -e --arg version "$version" '.template_version == $version' >/dev/null; then
+			printf '%s' "$commit"
+			return 0
+		fi
+	done < <(git -C "$source_repository" rev-list --all -- .template/manifest.json)
+	return 1
+}
+
+v031=$(git -C "$source_repository" rev-parse --verify v0.3.1^{commit} 2>/dev/null || resolve_manifest_revision "0.3.1")
+v040=$(git -C "$source_repository" rev-parse v0.4.0^{commit})
+v041=$(git -C "$source_repository" rev-parse HEAD^{commit})
 source_module_path=$(awk '$1 == "module" { print $2; exit }' "$source_repository/go.mod")
 if [[ -z "$source_module_path" ]]; then
 	echo "unable to resolve the source Go module path" >&2
@@ -44,6 +60,13 @@ extract_tag() {
 	local destination=$2
 	mkdir -p "$destination"
 	git -C "$source_repository" archive "$tag" | tar -x -C "$destination"
+}
+
+extract_revision() {
+	local revision=$1
+	local destination=$2
+	mkdir -p "$destination"
+	git -C "$source_repository" archive "$revision" | tar -x -C "$destination"
 }
 
 initialize_repository() {
@@ -328,6 +351,255 @@ run_deletion_update_test() {
 	expect_update_rejection "$source_directory" "${temporary}/deleting-target" "delete files require manual migration"
 }
 
+run_v041_clean_room_update_test() {
+	local directory="${temporary}/v041-derived"
+	local report_file="${temporary}/v041-dry-run.md"
+	extract_revision "$v031" "$directory"
+	initialize_repository "$directory"
+
+	(
+		cd "$directory"
+		GOCACHE="${temporary}/v041-cache" go run ./cmd/template \
+			-command record-provenance \
+			-template-version "0.3.1" \
+			-template-commit "$v031"
+	)
+	go -C "$directory" mod edit -module github.com/example/v040-derived
+	find "$directory" -type f -name '*.go' -print0 | while IFS= read -r -d '' file; do
+		sed -i "s|${escaped_source_module_path}|github.com/example/v040-derived|g" "$file"
+	done
+	temporary_manifest=$(mktemp)
+	jq '.dependency_versions["github.com/jackc/pgx/v5"] = "v5.8.0"' \
+		"$directory/.template/manifest.json" > "$temporary_manifest"
+	mv "$temporary_manifest" "$directory/.template/manifest.json"
+	git -C "$directory" add .
+	git -C "$directory" commit -qm "test: customize v0.4 clean-room repository"
+
+	local before
+	local after
+	before=$(git -C "$directory" status --porcelain)
+	"$repo_root/scripts/template-update.sh" \
+		--project-root "$directory" \
+		--template-repository "$source_repository" \
+		--from-commit "$v031" \
+		--to-commit "$v041" \
+		--dry-run \
+		--report-file "$report_file"
+	after=$(git -C "$directory" status --porcelain)
+	[[ "$before" == "$after" ]] || { echo "dry-run modified the derived repository" >&2; exit 1; }
+	grep -Fq -- '- status: dry-run' "$report_file"
+	grep -Fq -- '- breaking: false' "$report_file"
+
+	"$repo_root/scripts/template-update.sh" \
+		--project-root "$directory" \
+		--template-repository "$source_repository" \
+		--from-commit "$v031" \
+		--to-commit "$v041"
+
+	jq -e '.template_version == "0.4.1" and .template_commit == "'"$v041"'"' \
+		"$directory/.template/manifest.json" >/dev/null
+	jq -e '.dependency_versions["github.com/jackc/pgx/v5"] == "v5.10.0"' \
+		"$directory/.template/manifest.json" >/dev/null
+	test -f "$directory/.template/ownership.json"
+	grep -Fq 'github.com/example/v040-derived/internal/platform/errstore' "$directory/internal/app/routes.go"
+	GOCACHE="${temporary}/v041-derived-cache" go -C "$directory" test ./...
+}
+
+run_breaking_release_note_test() {
+	local source_directory="${temporary}/breaking-source"
+	local target_directory="${temporary}/breaking-target"
+	local report_file="${temporary}/breaking-dry-run.md"
+	local source_commit
+
+	git clone -q --no-hardlinks "$source_repository" "$source_directory"
+	git -C "$source_directory" config user.name "Template lifecycle test"
+	git -C "$source_directory" config user.email "template-lifecycle@example.invalid"
+	sed -i '0,/breaking: false/s//breaking: true/' "$source_directory/docs/releases/v0.4.0.md"
+	git -C "$source_directory" add docs/releases/v0.4.0.md
+	git -C "$source_directory" commit -qm "test: mark release as breaking"
+	source_commit=$(git -C "$source_directory" rev-parse HEAD)
+
+	extract_revision "$v041" "$target_directory"
+	initialize_repository "$target_directory"
+	(
+		cd "$target_directory"
+		GOCACHE="${temporary}/breaking-cache" go run ./cmd/template \
+			-command record-provenance \
+			-template-version "0.4.1" \
+			-template-commit "$v041"
+	)
+	git -C "$target_directory" add .template/manifest.json
+	git -C "$target_directory" commit -qm "test: record current template provenance"
+	"$repo_root/scripts/template-update.sh" \
+		--project-root "$target_directory" \
+		--template-repository "$source_directory" \
+		--from-commit "$v041" \
+		--to-commit "$source_commit" \
+		--dry-run \
+		--report-file "$report_file"
+	grep -Fq -- '- breaking: true' "$report_file"
+}
+
+run_action_pin_validation_test() {
+	local directory="${temporary}/action-pins"
+	mkdir -p "$directory/.github/workflows" "$directory/scripts"
+	cp "$repo_root/scripts/validate-action-pins.sh" "$directory/scripts/validate-action-pins.sh"
+	cat > "$directory/.github/workflows/valid.yml" <<'EOF'
+name: Valid pins
+on: push
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+EOF
+	(cd "$directory" && ./scripts/validate-action-pins.sh)
+	sed -i 's|actions/checkout@.* # v4.2.2|actions/checkout@v4|' "$directory/.github/workflows/valid.yml"
+	set +e
+	(cd "$directory" && ./scripts/validate-action-pins.sh) >"${directory}.log" 2>&1
+	local status=$?
+	set -e
+	[[ "$status" -ne 0 ]] || { echo "unpinned action was unexpectedly accepted" >&2; exit 1; }
+}
+
+run_workflow_validation_test() {
+	local directory="${temporary}/workflow-validation"
+	mkdir -p "$directory/.github/workflows" "$directory/scripts"
+	cp "$repo_root/scripts/validate-workflows.sh" "$directory/scripts/validate-workflows.sh"
+
+	cat > "$directory/.github/workflows/valid.yml" <<'EOF'
+name: Valid workflow
+on: push
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - run: printf '%s\n' "workflow is valid"
+EOF
+	(
+		cd "$directory"
+		./scripts/validate-workflows.sh
+	)
+
+	cat > "$directory/.github/workflows/invalid.yml" <<'EOF'
+name: Invalid workflow
+on: push
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "valid block"
+    invalid: [
+EOF
+	set +e
+	(
+		cd "$directory"
+		./scripts/validate-workflows.sh
+	) >"${directory}.log" 2>&1
+	local status=$?
+	set -e
+	[[ "$status" -ne 0 ]] || { echo "invalid workflow was unexpectedly accepted" >&2; exit 1; }
+}
+
+run_manifest_dependency_validation_test() {
+	local directory="${temporary}/manifest-dependency-validation"
+	mkdir -p "$directory/.template" "$directory/scripts"
+	cp "$repo_root/scripts/validate-manifest-dependencies.sh" "$directory/scripts/validate-manifest-dependencies.sh"
+	cp "$repo_root/go.mod" "$directory/go.mod"
+	cp "$repo_root/go.sum" "$directory/go.sum"
+	jq '{dependency_versions: .dependency_versions}' \
+		"$repo_root/.template/manifest.json" > "$directory/.template/manifest.json"
+	(
+		cd "$directory"
+		./scripts/validate-manifest-dependencies.sh
+	)
+
+	sed -i 's/v5.10.0/v5.9.2/' "$directory/.template/manifest.json"
+	set +e
+	(
+		cd "$directory"
+		./scripts/validate-manifest-dependencies.sh
+	) >"${directory}.log" 2>&1
+	local status=$?
+	set -e
+	[[ "$status" -ne 0 ]] || { echo "stale manifest dependency was unexpectedly accepted" >&2; exit 1; }
+}
+
+run_security_exception_tests() {
+	local directory="${temporary}/security-exceptions"
+	local valid_file="${directory}/valid.json"
+	local findings_file="${directory}/findings.txt"
+	local invalid_file="${directory}/invalid.json"
+	mkdir -p "$directory"
+	cat > "$valid_file" <<'EOF'
+{
+  "version": 1,
+  "exceptions": [
+    {
+      "scanner": "govulncheck",
+      "id": "GO-TEST-1",
+      "component": "example/module",
+      "reason": "Waiting for upstream fix.",
+      "owner": "platform@example.invalid",
+      "issue": "https://github.com/ThatSoftwareCompany/template-go-api/issues/1",
+      "expires_on": "2099-01-01"
+    }
+  ]
+}
+EOF
+	printf 'GO-TEST-1\texample/module\n' > "$findings_file"
+	"$repo_root/scripts/validate-security-exceptions.sh" --exceptions-file "$valid_file"
+	"$repo_root/scripts/check-security-exceptions.sh" --scanner govulncheck --findings-file "$findings_file" --exceptions-file "$valid_file"
+	printf 'GO-TEST-2\texample/module\n' > "$findings_file"
+	set +e
+	"$repo_root/scripts/check-security-exceptions.sh" --scanner govulncheck --findings-file "$findings_file" --exceptions-file "$valid_file" >/dev/null 2>&1
+	local status=$?
+	set -e
+	[[ "$status" -ne 0 ]] || { echo "unmatched security finding was unexpectedly accepted" >&2; exit 1; }
+
+	cat > "$invalid_file" <<'EOF'
+{
+  "version": 1,
+  "exceptions": [
+    {
+      "scanner": "govulncheck",
+      "id": "GO-EXPIRED",
+      "component": "example/module",
+      "reason": "Expired exception.",
+      "owner": "platform@example.invalid",
+      "issue": "https://github.com/ThatSoftwareCompany/template-go-api/issues/2",
+      "expires_on": "2000-01-01"
+    }
+  ]
+}
+EOF
+	set +e
+	"$repo_root/scripts/validate-security-exceptions.sh" --exceptions-file "$invalid_file" >/dev/null 2>&1
+	status=$?
+	set -e
+	[[ "$status" -ne 0 ]] || { echo "expired security exception was unexpectedly accepted" >&2; exit 1; }
+
+	cat > "$invalid_file" <<'EOF'
+{
+  "version": 1,
+  "exceptions": [
+    {
+      "scanner": "govulncheck",
+      "id": "GO-INCOMPLETE",
+      "component": "example/module",
+      "reason": "Missing ownership and issue metadata.",
+      "expires_on": "2099-01-01"
+    }
+  ]
+}
+EOF
+	set +e
+	"$repo_root/scripts/validate-security-exceptions.sh" --exceptions-file "$invalid_file" >/dev/null 2>&1
+	status=$?
+	set -e
+	[[ "$status" -ne 0 ]] || { echo "incomplete security exception was unexpectedly accepted" >&2; exit 1; }
+}
+
 run_setup_idempotency_test
 run_setup_enabled_database_test
 run_update_test
@@ -336,5 +608,11 @@ run_conflicting_file_test
 run_legacy_bootstrap_test
 run_incompatible_update_test
 run_deletion_update_test
+run_v041_clean_room_update_test
+run_breaking_release_note_test
+run_action_pin_validation_test
+run_workflow_validation_test
+run_manifest_dependency_validation_test
+run_security_exception_tests
 
 echo "Template lifecycle tests passed."

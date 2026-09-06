@@ -1,8 +1,8 @@
 {
   "template_id": "template-go-api",
   "template_source": "ThatSoftwareCompany/template-go-api",
-  "template_version": "0.3.0",
-  "template_commit": "5686b405edae8bdcba4ebc8de090785d66069053",
+  "template_version": "0.4.1",
+  "template_commit": "bad1e6cb37bb65a9f2a37e30944f7974ac31d7f4",
   "generated_from": "ThatSoftwareCompany/testing-templatev2",
   "repository": "ThatSoftwareCompany/template-go-api",
   "license": "Apache-2.0",

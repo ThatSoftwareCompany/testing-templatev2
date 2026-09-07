@@ -31,6 +31,7 @@ required_files=(
   "migrations/000002_create_authentication.down.sql"
   "scripts/generate-dev-auth-keys.sh"
   "scripts/template-update.sh"
+  "scripts/template-update-bootstrap.sh"
   "scripts/validate-manifest-dependencies.sh"
   "scripts/validate-workflows.sh"
   "scripts/validate-action-pins.sh"

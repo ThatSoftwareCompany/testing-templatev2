@@ -108,6 +108,14 @@ Implementation acceptance criteria: the auth module is isolated under `internal/
 
 Acceptance criteria: the template validates with all Action pins immutable; Dependency Review, `govulncheck`, Docker Scout, module integrity, lifecycle, race, integration, and build gates pass; dry-run leaves repositories unchanged; clean-room updates preserve `internal/app/routes.go`; and breaking, conflicting, incompatible, deleting, expired-exception, and unpinned-action scenarios fail safely.
 
+## `0.4.1` and `0.4.2` — update metadata compatibility
+
+- `0.4.1` synchronizes template-managed dependency metadata when a derived repository update changes `go.mod`.
+- `0.4.2` adds `scripts/template-update-bootstrap.sh` and runs it before the normal updater so repositories generated from the current template can migrate stale manifest metadata safely.
+- The bootstrap preserves provenance, generated project fields, and application-owned paths. Repositories generated before this workflow exists require one reviewed bootstrap commit during their first migration.
+
+Acceptance criteria: stale dependency metadata is repaired without changing provenance, dry-run leaves the repository unchanged, invalid target commits fail without partial edits, and the lifecycle suite preserves `internal/app/routes.go` and generated project metadata.
+
 ## `0.5.0` — provider-agnostic same-origin deployment contract
 
 Document and validate the deployment contract without changing the frontend template:
@@ -122,7 +130,7 @@ Document and validate the deployment contract without changing the frontend temp
 
 ## `1.0.0` — final validation
 
-Use the private `testing-templatev2` clean-room repository created from the GitHub Template Repository and run the full matrix: new setup, PostgreSQL mode, no-database mode, a business route registered only through `internal/app/routes.go`, tests, Docker, migrations, CI, automatic updates, route preservation, authentication, authorized internal errors, and secret/file absence checks. Publish `1.0.0` only after that repository passes from a clean start.
+Use the public `testing-templatev2` clean-room repository created from the GitHub Template Repository and run the full matrix: new setup, PostgreSQL mode, no-database mode, a business route registered only through `internal/app/routes.go`, tests, Docker, migrations, CI, automatic updates, route preservation, authentication, authorized internal errors, and secret/file absence checks. Publish `1.0.0` only after that repository passes from a clean start.
 
 ## Template maintenance and repository checklist
 

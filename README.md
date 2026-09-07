@@ -194,10 +194,12 @@ The template maintainer must publish version tags such as `v0.1.0` before derive
 
 ## Release roadmap
 
-The current release line is `0.4.0`. `v0.3.1` reconciles the protected application-route extension point that was merged after the original `v0.3.0` tag. `v0.4.0` adds supply-chain security and safer lifecycle automation. The immutable `v0.2.6`, `v0.2.7`, and `v0.2.8` tags remain historical; new generated repositories should use the latest release tag. The planned releases are:
+The current release line is `0.4.2`. `v0.3.1` reconciles the protected application-route extension point that was merged after the original `v0.3.0` tag. `v0.4.0` adds supply-chain security and safer lifecycle automation. `v0.4.1` synchronizes manifest dependency metadata, and `v0.4.2` adds a legacy-update metadata bootstrap. The immutable `v0.2.6`, `v0.2.7`, and `v0.2.8` tags remain historical; new generated repositories should use the latest release tag. The planned releases are:
 
 - `0.3.1`: release metadata reconciliation for the post-`v0.3.0` protected application-route extension point.
 - `0.4.0`: Dependabot, dependency review, `govulncheck`, Docker image scanning, strict `go.sum` checks, full-SHA Actions pinning, release notes, security exceptions, ownership metadata, and safer updater conflict reporting.
+- `0.4.1`: manifest dependency metadata synchronization during derived-repository updates.
+- `0.4.2`: pre-update manifest bootstrap for repositories using older updater scripts.
 - `0.5.0`: provider-agnostic same-origin deployment contract and trusted reverse-proxy configuration.
 - `1.0.0`: final validation from a clean `testing-templatev2` repository.
 
